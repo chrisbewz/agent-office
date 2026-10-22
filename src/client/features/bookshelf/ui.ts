@@ -149,6 +149,11 @@ async function getJson<T>(url: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** Where a repository serves a file's source at HEAD: GitLab keeps blobs under `/-/blob`, GitHub under `/blob`. */
+function blobBase(repoUrl: string): string {
+  return `${repoUrl}${repoUrl.includes('gitlab.com') ? '/-/blob/HEAD' : '/blob/HEAD'}`;
+}
+
 export function openBookshelf(deps: ShelfDeps) {
   const { floor, repoUrl } = deps;
   const q = (params: Record<string, string>) => new URLSearchParams({ floor, ...params }).toString();
@@ -289,7 +294,7 @@ export function openBookshelf(deps: ShelfDeps) {
         a.dataset.doc = to.path;
         a.dataset.hash = to.hash;
       } else if (repoUrl) {
-        a.href = `${repoUrl}/blob/HEAD/${to.path.split('/').map(encodeURIComponent).join('/')}${to.hash ? `#${to.hash}` : ''}`;
+        a.href = `${blobBase(repoUrl)}/${to.path.split('/').map(encodeURIComponent).join('/')}${to.hash ? `#${to.hash}` : ''}`;
       } else {
         a.removeAttribute('href');
         a.title = to.path;
@@ -328,7 +333,7 @@ export function openBookshelf(deps: ShelfDeps) {
     const words = doc.text.split(/\s+/).filter(Boolean).length;
     meta.replaceChildren(
       [`${Math.max(1, Math.round(words / 220))} min read`, info ? size(info.size) : '', info ? `updated ${timeAgo(info.mtime)}` : ''].filter(Boolean).join(' · '),
-      repoUrl ? h('a', { href: `${repoUrl}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`, target: '_blank', rel: 'noopener noreferrer', title: 'Open it on GitHub' }, 'GitHub ↗') : '',
+      repoUrl ? h('a', { href: `${blobBase(repoUrl)}/${path.split('/').map(encodeURIComponent).join('/')}`, target: '_blank', rel: 'noopener noreferrer', title: 'Open it on the forge' }, 'Forge ↗') : '',
     );
     turnedAt = 0;
     jump(hash);

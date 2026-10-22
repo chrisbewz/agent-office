@@ -19,7 +19,7 @@ function fixture(t: { after(fn: () => void): void }) {
   writeFileSync(path.join(dir, 'assets', 'gone.gif'), 'deleted picture');
   writeFileSync(path.join(dir, 'README.md'), '# demo\n');
   git('add', '.');
-  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'init');
   const target: ChangesTarget = { name: 'Worker 1', cwd: dir, rel: '' };
   const changes = new Changes(dir, 'main', (id) => (id === 'w1' ? target : undefined), () => undefined, {
     state() {},
@@ -44,7 +44,9 @@ test('a file outside the checkout, by .. or by a link, is refused', async (t) =>
   const outside = path.join(root, 'outside');
   mkdirSync(outside);
   writeFileSync(path.join(outside, 'secret.png'), 'secret');
-  assert.equal(await insideCheckout(dir, 'assets/logo.png'), realpathSync(path.join(dir, 'assets', 'logo.png')));
+  const inside = await insideCheckout(dir, 'assets/logo.png');
+  // tmpdir can hand out an 8.3 short name (CHRIST~1); the native realpath is the same file in its long form.
+  assert.ok(inside && realpathSync.native(inside) === realpathSync.native(path.join(dir, 'assets', 'logo.png')), `assets/logo.png inside the checkout, wherever tmpdir names it (got ${inside})`);
   assert.equal(await insideCheckout(dir, '../outside/secret.png'), undefined);
   assert.equal(await insideCheckout(dir, path.join(outside, 'secret.png')), undefined);
   assert.equal(await insideCheckout(dir, 'missing.png'), undefined);

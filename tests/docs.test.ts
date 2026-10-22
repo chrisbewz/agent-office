@@ -30,7 +30,7 @@ function fixture(t: { after(fn: () => void): void }, git: boolean) {
     g('init', '-q', '-b', 'main');
     put('.gitignore', 'node_modules\nignored\n.agent-office/\n');
     g('add', 'README.md', 'docs', 'src', '.gitignore');
-    g('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    g('-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'init');
     // New and not ignored: still the project's.
     put('NOTES.md', 'no heading here\n');
   }

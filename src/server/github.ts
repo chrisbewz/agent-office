@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhLabel, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState } from '../shared/protocol.js';
 import type { GhAs } from './signins.js';
+import type { BoardBackend } from './board.js';
 
 const REFRESH_MS = 90_000;
 /** How long the repo's list of labels is kept before the label picker asks GitHub again. */
@@ -162,7 +163,7 @@ export class Claims {
   }
 }
 
-export class GitHub {
+export class GitHub implements BoardBackend {
   issues: GhState<GhIssue> = { items: [], fetchedAt: 0, loading: false };
   pulls: GhState<GhPull> = { items: [], fetchedAt: 0, loading: false };
   private timer?: NodeJS.Timeout;

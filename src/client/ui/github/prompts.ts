@@ -46,6 +46,11 @@ export function reviewPrompt(it: GhPull) {
 }
 
 function mergeCommand(it: GhPull, method: GhMergeMethod, deleteBranch: boolean) {
+  // On GitLab the copied command merges normally: the merge dialog's squash/merge/rebase choice maps to
+  // the API's squash flag, which `glab mr merge` has no direct switch for.
+  if (store.floors.find((f) => f.id === store.floor)?.host === 'gitlab') {
+    return `glab mr merge ${it.number}${deleteBranch ? ' --remove-source-branch' : ''}`;
+  }
   return `gh pr merge ${it.number} --${method}${deleteBranch ? ' --delete-branch' : ''} --repo ${nameWithOwner(it.url)}`;
 }
 

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
+import type { ChangesState, FloorInfo, GhIssue, GhPull, GhState, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
 import { DESK_BY_ID } from '../shared/layout.js';
 import type { FloorDef } from './building.js';
@@ -9,6 +9,9 @@ import { excludeFromGit } from './config.js';
 import { agentProviders, configuredProvider } from './agents.js';
 import { WorkerManager, workedMs, type HookEnv, type RunAs } from './workers.js';
 import { GitHub, MergeWatch } from './github.js';
+import { GitLab } from './gitlab.js';
+import type { BoardBackend } from './board.js';
+import type { GitHost } from './forge.js';
 import type { GhAs } from './signins.js';
 import { TaskQueue } from './queue.js';
 import { Changes } from './changes.js';
@@ -113,7 +116,9 @@ export class Floor {
   readonly dir: string;
   readonly project: ProjectInfo;
   readonly workers: WorkerManager;
-  readonly github: GitHub;
+  readonly github: BoardBackend;
+  /** The forge this floor's repository lives on; its boards and its workers' forge actions follow it. */
+  readonly host: GitHost;
   readonly queue: TaskQueue;
   readonly changes: Changes;
   readonly decor: Decor;
@@ -147,6 +152,7 @@ export class Floor {
     readonly def: FloorDef,
     private ctx: FloorContext,
   ) {
+    this.host = def.host ?? 'github';
     this.id = def.id;
     this.dir = def.dir;
     const dataDir = path.join(def.dir, '.agent-office');
@@ -207,23 +213,22 @@ export class Floor {
     );
     this.workers.wing = () => this.plan.wing;
 
-    this.github = new GitHub(
-      def.dir,
-      (state) => ctx.emit(this, { t: 'gh.issues', state }),
-      (state) => {
-        ctx.emit(this, { t: 'gh.pulls', state });
-        this.queue?.onPulls(state.items);
-        if (state.loading || state.error) return;
-        // A worker may have opened one from a branch it made itself, mid-turn or from a shell.
-        void this.workers.syncBranches();
-        for (const p of this.merges.look(state.items)) {
-          ctx.toast(this, `🎉 PR #${p.number} merged: ${p.title}`);
-          this.merged(p.number);
-        }
-        this.sendLandedHome();
-        ctx.pullsChanged(this);
-      },
-    );
+    const onIssues = (state: GhState<GhIssue>) => ctx.emit(this, { t: 'gh.issues', state });
+    const onPulls = (state: GhState<GhPull>) => {
+      ctx.emit(this, { t: 'gh.pulls', state });
+      this.queue?.onPulls(state.items);
+      if (state.loading || state.error) return;
+      // A worker may have opened one from a branch it made itself, mid-turn or from a shell.
+      void this.workers.syncBranches();
+      for (const p of this.merges.look(state.items)) {
+        ctx.toast(this, `🎉 PR #${p.number} merged: ${p.title}`);
+        this.merged(p.number);
+      }
+      this.sendLandedHome();
+      ctx.pullsChanged(this);
+    };
+    // A GitLab checkout gets a GitLab board backend; everything downstream speaks the same shape.
+    this.github = this.host === 'gitlab' ? new GitLab(def.dir, onIssues, onPulls, undefined, def.repo) : new GitHub(def.dir, onIssues, onPulls);
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
     this.queue = new TaskQueue(dataDir, this.workers, !!this.project.branch, {
       update: (state) => {
@@ -233,6 +238,8 @@ export class Floor {
       },
       toast: (text, level) => ctx.toast(this, text, level),
       claimIssue: (issue, owner) => {
+        // On a GitLab floor the office's own token assigns; nobody needs a GitHub sign-in for it.
+        if (this.host === 'gitlab') return this.github.claim(issue);
         const as = ctx.ghAs(owner);
         return typeof as === 'string' ? Promise.resolve(as) : this.github.claim(issue, as);
       },
@@ -268,6 +275,7 @@ export class Floor {
         toast: (text, level) => ctx.toast(this, text, level),
         hiringPaused: () => ctx.ledger.hiringPaused,
         postReview: (pr, file, owner) => {
+          if (this.host === 'gitlab') return this.github.review(pr, file);
           const as = ctx.ghAs(owner);
           return typeof as === 'string' ? Promise.reject(new Error(as)) : this.github.review(pr, file, as);
         },
@@ -395,6 +403,7 @@ export class Floor {
       id: this.id,
       name: this.def.name,
       repo: this.def.repo,
+      ...(this.host === 'gitlab' ? { host: 'gitlab' as const } : {}),
       dir: this.dir,
       branch: this.project.branch,
       palette: this.def.palette,
