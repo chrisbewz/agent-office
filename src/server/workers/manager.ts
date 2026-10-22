@@ -205,9 +205,9 @@ export class WorkerManager {
    * Fetches the branch the project is on, so a worktree made next starts from what's on GitHub now
    * (see Worktrees.fetch). Undefined when there's nothing to wait for.
    */
-  fetchBase(): Promise<void> | undefined {
-    return this.trees.fetch();
-  }
+  fetchBase(): Promise<void> | undefined { return this.trees.fetch(); }
+  listBranches(): string[] { return this.trees.listBranches(); }
+  currentBranch(): string | undefined { return this.trees.currentBranch(); }
 
   deskOccupied(deskId: string): boolean {
     for (const w of this.workers.values()) if (w.info.deskId === deskId) return true;
@@ -219,7 +219,7 @@ export class WorkerManager {
    * (see meetings.ts), in the meeting's own worktree, which everyone at the table shares. `repos` are
    * other floors' repositories a worker in its own worktree works in too (see makeWorkspace).
    */
-  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, owner?: string, repos: RepoSource[] = [], via?: 'herald'): WorkerInfo | string {
+  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, owner?: string, repos: RepoSource[] = [], via?: 'herald', sourceBranch?: string): WorkerInfo | string {
     // Nobody picked (a board agent, say): the office's default worker, model and effort included.
     if (kind === 'agent' && provider === undefined) ({ provider, model, effort } = this.officeDefault);
     const selectedProvider = kind === 'agent' ? provider : undefined;
@@ -255,7 +255,7 @@ export class WorkerManager {
     let others: WorkerRepo[] | undefined;
     if (worktree) {
       const slug = `${name.toLowerCase()}-${id.slice(0, 4)}`;
-      const made = repos.length ? this.makeWorkspace(slug, repos) : this.trees.create(slug);
+      const made = repos.length ? this.makeWorkspace(slug, repos) : this.trees.create(slug, undefined, undefined, sourceBranch);
       if (typeof made === 'string') return made;
       if ('repos' in made) {
         ({ worktree: wt, repos: others } = made);

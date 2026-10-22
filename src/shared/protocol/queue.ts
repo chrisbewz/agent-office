@@ -19,6 +19,8 @@ export interface QueueTask {
   addedBy: string;
   /** The account that queued it: its worker runs on that account's own sign-ins. None: the office's own. */
   owner?: string;
+  /** Branch this task's worker starts from; absent keeps the floor checkout's branch. */
+  sourceBranch?: string;
   addedAt: number;
   status: TaskStatus;
   /** The worker seated for it (it may have gone home since). */
@@ -37,12 +39,16 @@ export interface QueueTask {
 
 export interface QueueState {
   tasks: QueueTask[];
+  /** Local and origin branches available to new tasks. */
+  sourceBranches?: string[];
+  /** The branch used when a task has no explicit sourceBranch. */
+  defaultSourceBranch?: string;
   /** How many workers the queue may keep busy at once; 0 pauses it. */
   maxWorkers: number;
 }
 
 export type QueueClientMsg =
-  | { t: 'queue.add'; prompt: string; title?: string; issue?: number; provider?: AgentProvider; model?: string; effort?: AgentEffort }
+  | { t: 'queue.add'; prompt: string; title?: string; issue?: number; provider?: AgentProvider; model?: string; effort?: AgentEffort; sourceBranch?: string }
   | { t: 'queue.remove'; taskId: string }
   /** Move a queued task up (-1) or down (+1) the queue. */
   | { t: 'queue.move'; taskId: string; delta: number }
