@@ -19,6 +19,8 @@ type Invocation = {
     workerId?: string;
     hookToken?: string;
     hookUrl?: string;
+    codexNode?: string;
+    codexHook?: string;
     opencodeConfig?: string;
     grokHome?: string;
     grokAuth?: string;
@@ -103,6 +105,8 @@ const record = (extra = {}) => fs.appendFileSync(log, JSON.stringify({
   env: {
     workerId: process.env.AGENT_OFFICE_WORKER_ID,
     hookToken: process.env.AGENT_OFFICE_HOOK_TOKEN,
+    codexNode: process.env.AGENT_OFFICE_CODEX_NODE,
+    codexHook: process.env.AGENT_OFFICE_CODEX_HOOK,
     hookUrl: process.env.AGENT_OFFICE_HOOK_URL,
     opencodeConfig: process.env.OPENCODE_CONFIG_CONTENT,
     grokHome: process.env.GROK_HOME,
@@ -635,6 +639,8 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   // The office's MCP server, with the office's variables passed on to it, which Codex doesn't do unasked.
   assert.ok(first.args.some((a) => a.startsWith('mcp_servers.agent-office.args=') && a.includes('office-workers.js')));
   assert.ok(first.args.includes('mcp_servers.agent-office.env_vars=["AGENT_OFFICE_HOOK_URL","AGENT_OFFICE_WORKER_ID","AGENT_OFFICE_HOOK_TOKEN"]'));
+  assert.equal(first.env.codexNode, process.execPath);
+  assert.match(first.env.codexHook ?? '', /agent-office-codex-hook\.cjs$/);
   assert.deepEqual(first.args.slice(-2), ['--', '- fix the login']);
 
   const longPrompt = 'meeting brief\n'.repeat(1_500);

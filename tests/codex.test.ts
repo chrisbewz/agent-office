@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,43 @@ import {
   writeCodexHook,
 } from '../src/server/codex.js';
 import { codex } from '../src/server/providers/codex.js';
+import { codexMcpArgs } from '../src/server/office-workers.js';
+import { createRequire } from 'node:module';
+
+test('Windows Codex hook and MCP arguments leave room for the batch launcher', () => {
+  const base = `C:\\Users\\example\\source\\repos\\project${'x'.repeat(50)}`;
+  const args = [
+    ...codexHookArgs(`${base}\\.agent-office\\agent-office-codex-hook.cjs`, 'win32'),
+    ...codexMcpArgs(`${base}\\bin\\office-workers.js`), '--no-alt-screen', '--',
+    'Read and follow the complete initial task in .agent-office/initial-prompts/123456789abc.txt. Begin work now.',
+  ];
+  const length = args.reduce((n, arg) => n + arg.length + (arg.match(/["\\]/g)?.length ?? 0) + 3, 0);
+  assert.ok(length < 7_000, `Windows arguments consume ${length} characters before the launcher`);
+});
+
+test('Windows batch launcher starts with meeting-sized Codex arguments', { skip: process.platform !== 'win32' }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'office-codex-launch-'));
+  try {
+    const batch = path.join(dir, 'codex.cmd');
+    const program = path.join(dir, 'codex.cjs');
+    writeFileSync(program, "process.stdout.write('LAUNCH_OK');\n");
+    writeFileSync(batch, `@echo off\r\n"${process.execPath}" "${program}" %*\r\n`);
+    const hook = path.join(dir, 'a'.repeat(70), 'agent-office-codex-hook.cjs');
+    const args = [...codexHookArgs(hook, 'win32'), ...codexMcpArgs(path.join(dir, 'office-workers.js')),
+      '--no-alt-screen', '--', 'Read the initial task in .agent-office/initial-prompts/123456789abc.txt.'];
+    const argsFile = path.join(dir, 'args.json');
+    const runner = path.join(dir, 'runner.cjs');
+    writeFileSync(argsFile, JSON.stringify(args));
+    const ptyPath = createRequire(import.meta.url).resolve('@lydell/node-pty');
+    writeFileSync(runner, `const fs = require('node:fs'); const pty = require(${JSON.stringify(ptyPath)});\n`
+      + `const terminal = pty.spawn(process.argv[2], JSON.parse(fs.readFileSync(process.argv[3])), { cwd: process.cwd(), env: process.env, cols: 120, rows: 20 });\n`
+      + `terminal.onData(data => fs.writeSync(1, data)); terminal.onExit(e => process.exit(e.exitCode));\n`);
+    const output = execFileSync(process.execPath, [runner, batch, argsFile], { cwd: dir, encoding: 'utf8', timeout: 15_000 });
+    assert.match(output, /LAUNCH_OK/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('normalizes bounded root Codex hook payloads and passes only the metric reader path', () => {
   assert.deepEqual(normalizeCodexHook('SessionStart', {
@@ -206,7 +243,7 @@ test('Windows hook command forwards UTF-8 stdin through the shell with literal p
     for (const shell of ['cmd.exe', 'powershell.exe']) {
       const args = shell === 'cmd.exe' ? ['/d', '/s', '/c', command] : ['-NoProfile', '-NonInteractive', '-Command', command];
       const child = spawn(shell, args, {
-        env: { ...process.env, AGENT_OFFICE_HOOK_URL: `http://127.0.0.1:${address.port}`, AGENT_OFFICE_HOOK_TOKEN: 'test', AGENT_OFFICE_WORKER_ID: 'worker-1' },
+        env: { ...process.env, AGENT_OFFICE_CODEX_NODE: process.execPath, AGENT_OFFICE_CODEX_HOOK: file, AGENT_OFFICE_HOOK_URL: `http://127.0.0.1:${address.port}`, AGENT_OFFICE_HOOK_TOKEN: 'test', AGENT_OFFICE_WORKER_ID: 'worker-1' },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       let stdout = '', stderr = '';

@@ -102,7 +102,11 @@ export const codex: ProviderAdapter<CodexState, CodexSetup> = {
     if (initial) args.push('--', initial.argument);
     tracker(h.state).clear();
     const preparePrompt = initial?.prepare;
-    return { args, rotateToken: true, ...(preparePrompt ? { finishEnv: preparePrompt } : {}) };
+    return {
+      args, rotateToken: true,
+      env: { AGENT_OFFICE_CODEX_NODE: process.execPath, AGENT_OFFICE_CODEX_HOOK: setup.hook },
+      ...(preparePrompt ? { finishEnv: preparePrompt } : {}),
+    };
   },
   exited(h, cwd) {
     removeCodexInitialPrompt(cwd, h.info.id);
