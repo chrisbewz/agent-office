@@ -129,6 +129,38 @@ const until = async (fn: () => boolean) => {
   for (let i = 0; i < 200 && !fn(); i++) await new Promise((r) => setTimeout(r, 25));
 };
 
+test('an explicit GitLab URL never clones the same path from GitHub', async (t) => {
+  const { root, dataDir, projects } = office(t);
+  if (process.platform === 'win32') {
+    copyFileSync(process.execPath, path.join(root, 'bin', 'glab.exe'));
+    writeFileSync(path.join(dataDir, 'api'), 'process.exit(1)');
+  } else {
+    writeFileSync(path.join(root, 'bin', 'glab'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  }
+  const building = new Building(dataDir, projects, fast);
+  const result = await building.add('https://gitlab.com/acme/game', 'Sam', () => {});
+  assert.equal(typeof result, 'string');
+  assert.deepEqual(building.list(), []);
+  assert.equal(existsSync(path.join(projects, 'acme', 'game', 'index.html')), false);
+});
+
+test('a GitHub checkout cannot be reused for a GitLab project with the same path', async (t) => {
+  const { root, dataDir, projects } = office(t);
+  if (process.platform === 'win32') {
+    copyFileSync(process.execPath, path.join(root, 'bin', 'glab.exe'));
+    writeFileSync(path.join(dataDir, 'api'), 'console.log(JSON.stringify({path_with_namespace: "acme/game"}))');
+  } else {
+    writeFileSync(path.join(root, 'bin', 'glab'), '#!/bin/sh\necho \'{"path_with_namespace":"acme/game"}\'\n', { mode: 0o755 });
+  }
+  const building = new Building(dataDir, projects, fast);
+  const first = await building.add('acme/game', 'Sam', () => {});
+  assert.equal(typeof first, 'object');
+  building.remove((first as FloorDef).id);
+  const result = await building.add('https://gitlab.com/acme/game', 'Sam', () => {});
+  assert.match(String(result), /isn't a checkout of gitlab\/acme\/game/);
+  assert.deepEqual(building.list(), []);
+});
+
 test("git's progress reads as a step, how far and how fast", () => {
   const out = "Cloning into '/x/acme/game'...\nremote: Enumerating objects: 2742, done.\nremote: Counting objects: 100% (5/5), done.\nReceiving objects:  12% (330/2742), 40.12 MiB | 1.52 MiB/s\rReceiving objects:  64% (1755/2742), 231.40 MiB | 1.50 MiB/s\r";
   assert.deepEqual(parseProgress(out), { step: 'Downloading', percent: 64, detail: '231.40 MiB · 1.50 MiB/s' });

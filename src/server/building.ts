@@ -6,8 +6,9 @@ import { FLOOR_PALETTES, MAX_FLOORS, normalizeRepo, sameRepo } from '../shared/f
 import type { CloneProgress, ProjectsDirState, RepoChoice } from '../shared/protocol.js';
 import { CloneRun, dropLog, whyCloneFailed, type CloneEnd, type CloneRunOptions } from './clone.js';
 import { gh } from './github.js';
-import { originRemote, originRepo, type GitHost } from './forge.js';
-import { gitlabRepos, onGitLab } from './gitlab.js';
+import { originRemote, repoOn, type GitHost } from './forge.js';
+import { onGitLab } from './gitlab.js';
+import { listRepos } from './repositories.js';
 
 /** A floor as floors.json keeps it. */
 export interface FloorDef {
@@ -68,7 +69,6 @@ export interface BuildingOptions {
 
 /** How long the list of repositories `gh` can see is reused before it's asked again. */
 const REPOS_TTL_MS = 5 * 60_000;
-const MAX_REPOS = 1000;
 
 /**
  * The floors of the building, saved in <office>/.agent-office/floors.json: which projects there are,
@@ -192,12 +192,12 @@ export class Building {
         dropLog(s.log);
         continue;
       }
-      const def = this.newDef(s.name, repo, s.dir, s.addedBy);
+      const def = this.newDef(s.name, repo, s.dir, s.addedBy, s.host);
       const pending: Pending = { def, owner: s.owner, empty: !!s.empty };
       const run = CloneRun.adopt(s.pid, s.log, { ...this.opts.clone, changed: () => this.cloneChanged?.() });
       if (!run) {
         dropLog(s.log);
-        if (checkoutAt(def.dir, repo, pending.empty) !== 'ok') {
+        if (checkoutAt(def.dir, repo, pending.empty, def.host) !== 'ok') {
           done(`Cloning ${repo} stopped when the office restarted — add it again`);
           continue;
         }
@@ -286,15 +286,18 @@ export class Building {
    * checkout that's already where the clone would go is used as it is. `account` (whoever's adding it)
    * can stop the clone, as admins can.
    */
-  async add(input: string, by: string, started: (def: FloorDef) => void, account?: string): Promise<FloorDef | string> {
+  async add(input: string, by: string, started: (def: FloorDef) => void, account?: string, requestedHost?: GitHost): Promise<FloorDef | string> {
     const wanted = normalizeRepo(input);
     if (!wanted) return 'Pick a repository, or type it as owner/name';
+    const inputHost = repoOn(input)?.host;
+    if (inputHost && requestedHost && inputHost !== requestedHost) return 'The repository URL and selected forge do not match';
+    requestedHost ??= inputHost;
     if (this.defs.some((d) => sameRepo(d.repo, wanted))) return `${wanted} already has a floor`;
     if (this.cloning.has(wanted.toLowerCase())) return `${wanted} is already being cloned`;
     if (this.defs.length + this.cloning.size >= MAX_FLOORS) return `The building is full (${MAX_FLOORS} floors)`;
     // The office's own checkout, taken off before: it moves back in where it is, not into a second clone.
     const home = this.local;
-    if (this.localOff && home && sameRepo(home.repo, wanted) && existsSync(home.dir)) {
+    if (this.localOff && home && sameRepo(home.repo, wanted) && (!requestedHost || (home.host ?? 'github') === requestedHost) && existsSync(home.dir)) {
       const def = this.newDef(path.basename(home.dir), home.repo, home.dir, by, home.host);
       started(def);
       this.defs.push(def);
@@ -308,13 +311,15 @@ export class Building {
     let empty = false;
     let host: GitHost = 'github';
     try {
+      if (requestedHost === 'gitlab') throw new Error('GitLab selected');
       const view = JSON.parse(await gh(['repo', 'view', wanted, '--json', 'nameWithOwner,isEmpty'], this.dataDir, 30_000)) as { nameWithOwner?: string; isEmpty?: boolean };
       repo = normalizeRepo(view.nameWithOwner) ?? wanted;
       empty = view.isEmpty === true;
     } catch (err) {
+      if (requestedHost === 'github') return `Couldn't find ${wanted} on GitHub: ${(err as Error).message}`;
       // Not on GitHub (or gh can't see it): it may be a GitLab project instead.
       const found = await onGitLab(wanted, this.dataDir);
-      if (!found) return `Couldn't find ${wanted} on GitHub: ${(err as Error).message} (or, for GitLab, install glab and sign in: glab auth login)`;
+      if (!found) return requestedHost === 'gitlab' ? `Couldn't find ${wanted} on GitLab; check glab and its login` : `Couldn't find ${wanted} on GitHub: ${(err as Error).message} (or, for GitLab, install glab and sign in: glab auth login)`;
       repo = found.repo;
       empty = found.empty;
       host = 'gitlab';
@@ -346,7 +351,7 @@ export class Building {
   private async clone(p: Pending): Promise<string | undefined> {
     const { dir: dest } = p.def;
     const repo = p.def.repo!;
-    const there = checkoutAt(dest, repo, p.empty);
+    const there = checkoutAt(dest, repo, p.empty, p.def.host);
     // Cloned before (a floor that was taken off the list, or by hand): move back in.
     if (there === 'ok') return undefined;
     if (there !== 'none') return there;
@@ -373,7 +378,7 @@ export class Building {
     if (p.run) dropLog(p.run.log);
     if (end.stopped) return end.stopped;
     // Its exit code isn't the word on it (a clone an office before this one started has none): the checkout is.
-    if (checkoutAt(p.def.dir, p.def.repo!, p.empty) === 'ok') return undefined;
+    if (checkoutAt(p.def.dir, p.def.repo!, p.empty, p.def.host) === 'ok') return undefined;
     return `Couldn't clone ${p.def.repo}: ${whyCloneFailed(end.output)}`;
   }
 
@@ -529,11 +534,12 @@ function unwritable(dir: string): string | undefined {
  * What's at `dest`: nothing yet ('none'), a checkout of `repo` ('ok'), or why it's in the way. A
  * clone that was cut off has its origin but no commit checked out; an `empty` repository has none to.
  */
-function checkoutAt(dest: string, repo: string, empty: boolean): 'none' | 'ok' | string {
+function checkoutAt(dest: string, repo: string, empty: boolean, host: GitHost = 'github'): 'none' | 'ok' | string {
   if (!existsSync(dest)) return 'none';
   if (!statSync(dest).isDirectory()) return `${dest} is already there and isn't a folder`;
   if (!readdirSync(dest).length) return 'none';
-  if (!sameRepo(originRepo(dest), repo)) return `${dest} already exists and isn't a checkout of ${repo} — move it out of the way first`;
+  const origin = originRemote(dest);
+  if (!sameRepo(origin?.repo, repo) || origin?.host !== host) return `${dest} already exists and isn't a checkout of ${host}/${repo} — move it out of the way first`;
   if (!empty && !hasCommit(dest)) return `${dest} is a clone of ${repo} that didn't finish — delete that folder and add the floor again`;
   return 'ok';
 }
@@ -555,46 +561,4 @@ function cloneHere(repo: string, dest: string, host: GitHost = 'github'): Promis
     child.once('error', (err: NodeJS.ErrnoException) => resolve(err.code === 'ENOENT' ? (host === 'gitlab' ? "The GitLab CLI (glab) isn't installed on this machine" : "The GitHub CLI (gh) isn't installed on this machine") : `Couldn't run ${cli}: ${err.message}`));
     child.once('exit', (code, signal) => resolve(code === 0 ? undefined : `Couldn't clone ${repo}: ${cli} ${signal ? `stopped (${signal})` : `failed (exit ${code})`}`));
   });
-}
-
-async function listRepos(cwd: string): Promise<RepoChoice[]> {
-  const out = await gh(
-    [
-      'api',
-      '--paginate',
-      'user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member',
-      '--jq',
-      '.[] | {name: .full_name, description: (.description // ""), private: .private, pushedAt: .pushed_at}',
-    ],
-    cwd,
-    90_000,
-  );
-  const repos: RepoChoice[] = [];
-  const seen = new Set<string>();
-  for (const line of out.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const r = JSON.parse(line) as { name?: unknown; description?: unknown; private?: unknown; pushedAt?: unknown };
-      const name = normalizeRepo(r.name);
-      if (!name || seen.has(name.toLowerCase())) continue;
-      seen.add(name.toLowerCase());
-      repos.push({
-        name,
-        description: typeof r.description === 'string' && r.description ? r.description.slice(0, 200) : undefined,
-        private: r.private === true,
-        pushedAt: typeof r.pushedAt === 'string' ? r.pushedAt : undefined,
-      });
-    } catch {
-      // not a line of ours
-    }
-    if (repos.length >= MAX_REPOS) break;
-  }
-  // The office's GitLab login may see more (or other) projects. Best effort: no glab, no GitLab repos, same picker.
-  for (const r of await gitlabRepos(cwd)) {
-    if (seen.has(r.name.toLowerCase())) continue;
-    seen.add(r.name.toLowerCase());
-    repos.push(r);
-    if (repos.length >= MAX_REPOS) break;
-  }
-  return repos.sort((a, b) => (b.pushedAt ?? '').localeCompare(a.pushedAt ?? ''));
 }
