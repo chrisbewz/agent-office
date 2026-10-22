@@ -706,7 +706,6 @@ export class WorkerManager {
       this.persist();
       return;
     }
-
     // The host keeps its own copy of the screen for the next office: it starts with the same history.
     const where = { cwd, env, cols: info.cols, rows: info.rows, prelude };
     let proc: Pty;
@@ -722,6 +721,7 @@ export class WorkerManager {
         proc = this.host.spawn({ file: shell, args: shellRun(line), ...where });
       }
     } catch (err) {
+      adapter?.exited?.(this.handleOf(w), cwd);
       this.startFailed(w, (err as Error).message);
       return;
     }

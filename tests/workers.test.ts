@@ -636,6 +636,19 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   assert.ok(first.args.some((a) => a.startsWith('mcp_servers.agent-office.args=') && a.includes('office-workers.js')));
   assert.ok(first.args.includes('mcp_servers.agent-office.env_vars=["AGENT_OFFICE_HOOK_URL","AGENT_OFFICE_WORKER_ID","AGENT_OFFICE_HOOK_TOKEN"]'));
   assert.deepEqual(first.args.slice(-2), ['--', '- fix the login']);
+
+  const longPrompt = 'meeting brief\n'.repeat(1_500);
+  const longWorker = workers.spawn('desk-2', 'test', longPrompt, false, 'agent', 'codex');
+  assert.notEqual(typeof longWorker, 'string'); if (typeof longWorker === 'string') return;
+  const longCalls = await waitFor(f.read, x => x.filter(r => r.kind === 'codex').length >= 2);
+  const longCall = longCalls.find(r => r.env.workerId === longWorker.id)!;
+  const promptFile = path.join(f.root, '.agent-office', 'initial-prompts', `${longWorker.id}.txt`);
+  assert.deepEqual(longCall.args.slice(-2), [
+    '--',
+    `Read and follow the complete initial task in .agent-office/initial-prompts/${longWorker.id}.txt. Begin work now.`,
+  ]);
+  assert.equal(readFileSync(promptFile, 'utf8'), longPrompt);
+  assert.ok(longCall.args.join(' ').length < 8_191);
   assert.equal(first.args.some(a => /bypass|--yolo|--claude-only|--settings/.test(a)), false);
   assert.equal(first.args.filter(a => a.startsWith('hooks.')).length, 7);
   assert.equal(calls.some(r => r.kind === 'claude'), false);
@@ -643,6 +656,7 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   assert.equal(workers.handleCodexHook(worker.id, 'wrong', 'SessionStart', { session_id: 'codex-root' }), false);
   assert.equal(hook('SessionStart', { source: 'startup' }), true);
   assert.equal(worker.status, 'idle');
+  assert.equal(first.stdin, undefined, 'the first task is supplied to Codex at launch');
   assert.equal(hook('UserPromptSubmit', { prompt: 'Implement the actual task' }), true);
   assert.equal(worker.status, 'working');
   assert.equal(hook('PreToolUse', { tool_name: 'exec_command', tool_use_id: 'call-permission' }), true);
@@ -663,6 +677,7 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   assert.equal(worker.usage, undefined);
   assert.equal(book.state().total.calls, 0);
   workers.shutdown();
+  assert.equal(existsSync(promptFile), false);
   const restored = manager(f, f.claude, [], []);
   t.after(() => restored.shutdown());
   // Wakes the workers from before the restart (see WorkerManager.start).
