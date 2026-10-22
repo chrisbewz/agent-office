@@ -14,6 +14,11 @@ export function gates(ctx: Ctx): Gates {
    */
   const takeIssue = (c: Client, floor: Floor, n: number) => {
     floor.queue.dropIssue(n);
+    // On a GitLab floor the office's own token assigns; nobody needs a GitHub sign-in for it.
+    if (floor.host === 'gitlab') {
+      void floor.github.claim(n).then((err) => ctx.warn(c, err && `Couldn't assign issue #${n} on GitLab: ${err}`));
+      return;
+    }
     const as = c.accountId ? ctx.signins.ghAs(c.accountId) : undefined;
     if (typeof as === 'string') return ctx.warn(c, `Couldn't assign issue #${n} on GitHub: ${as}`);
     void floor.github.claim(n, as).then((err) => ctx.warn(c, err && `Couldn't assign issue #${n} on GitHub: ${err}`));
@@ -52,9 +57,10 @@ export function gates(ctx: Ctx): Gates {
       go();
     });
   };
-  /** Runs `go` with how the office acts on GitHub for `c`: as them, or as itself (no account, or an admin's choice). */
-  const withGitHub = (c: Client, go: (as: GhAs | undefined) => void, refused?: (why: string) => void) =>
-    withSignIn(
+  /** Runs `go` with how the office acts on GitHub for `c`: as them, or as itself (no account, or an
+   * admin's choice). On a GitLab floor (pass `floor`) it's always the office, through GITLAB_TOKEN. */
+  const withGitHub = (c: Client, go: (as: GhAs | undefined) => void, refused?: (why: string) => void, floor?: Floor) =>
+    floor?.host === 'gitlab' ? go(undefined) : withSignIn(
       c,
       'github',
       () => {

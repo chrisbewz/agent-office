@@ -170,8 +170,8 @@ export interface Gates {
    * are still there.
    */
   withFreshBase(c: Client, floor: Floor | Floor[], go: () => void): void;
-  /** Runs `go` with how the office acts on GitHub for `c`: as them, or as itself (no account, or an admin's choice). */
-  withGitHub(c: Client, go: (as: GhAs | undefined) => void, refused?: (why: string) => void): void;
+  /** With `floor` given and it a GitLab floor, `go` runs as the office at once: per-user sign-ins are GitHub-only. */
+  withGitHub(c: Client, go: (as: GhAs | undefined) => void, refused?: (why: string) => void, floor?: Floor): void;
   /** Needs a Claude sign-in of its own when the worker it starts runs Claude. */
   claudeFor(provider: string | undefined): SignInKind | undefined;
 }

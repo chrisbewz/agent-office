@@ -62,3 +62,13 @@ agent-office tunnel [office@address | url] [--port <n>] [--office-port <n>] [--n
   the worker stops it. Given an SSH address it opens the tunnel to the office too.
   See docs/tunnel.md.
 ```
+
+## GitLab
+
+A floor whose git origin is on GitLab serves its boards from GitLab instead of GitHub: issues and merge requests, with comments, labels, closing, merging (squashed through the API's own squash flag), the merge gong and the PR window's diff. It picks the forge from the floor's origin remote, so a `gitlab.com` checkout gets GitLab boards and everything else gets GitHub. To add one, paste a `gitlab.com` URL in the elevator or type the project path — groups may nest, as in `group/sub/project` — and the office clones it through `glab`. The picker lists `glab`'s projects alongside your `gh` ones.
+
+The office talks to GitLab through the **GitLab CLI**'s API passthrough, so `glab` owns the sign-in: install it and run `glab auth login`, or set `GITLAB_TOKEN`. Either one is enough; the CLI reads the token itself. For a self-hosted instance, set `GITLAB_HOST` to its host (like `gitlab.example.com`) and sign in to it the same way.
+
+There are no per-user GitLab sign-ins yet. On a GitLab floor the office acts as itself, with the machine's `glab` login or `GITLAB_TOKEN`, whether you're on the office password or your own account — so comments, merges and claimed issues show up under whoever that token belongs to, not you. GitHub floors keep acting as you through **🔐 Your sign-ins**.
+
+The boards work the same way, with a few shapes to know: a merge request's approvals show as its review state in the PR window, and its cards carry no diff size. Closing a merge request takes no close reason, unlike a GitHub issue. Board agents adapt their advice to the forge, so on a GitLab floor the issues agent files, labels and closes with `glab`.

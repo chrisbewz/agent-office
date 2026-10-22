@@ -30,6 +30,7 @@ export const githubHandlers = {
           if (!msg.auto) floor.merged(n, who);
         }),
       (error) => ctx.sendTo(c, { t: 'gh.merged', number: n, error }),
+      floor,
     );
   },
   'gh.comment'(ctx, c, msg) {
@@ -53,6 +54,7 @@ export const githubHandlers = {
           if (r.comment) ctx.toastFloor(floor, `💬 ${who} commented on ${kind === 'pull' ? 'PR' : 'issue'} #${n}`);
         }),
       (error) => ctx.sendTo(c, { t: 'gh.commented', kind, number: n, error }),
+      floor,
     );
   },
   'gh.close'(ctx, c, msg) {
@@ -74,6 +76,7 @@ export const githubHandlers = {
           ctx.toastFloor(floor, `${who} closed issue #${n}${reason === 'not planned' ? ' as not planned' : ''}${dropped ? ' and took it off the queue' : ''}`);
         }),
       (error) => ctx.sendTo(c, { t: 'gh.closed', kind, number: n, error }),
+      floor,
     );
   },
   'gh.labels'(ctx, c, msg) {
@@ -97,6 +100,7 @@ export const githubHandlers = {
           if (r.labels) ctx.toastFloor(floor, `🏷️ ${who} labeled ${kind === 'pull' ? 'PR' : 'issue'} #${n}: ${[...add.map((l) => `+${l}`), ...remove.map((l) => `−${l}`)].join(' ')}`);
         }),
       (error) => ctx.sendTo(c, { t: 'gh.labeled', kind, number: n, error }),
+      floor,
     );
   },
 } satisfies HandlerMap<GitHubClientMsg>;
