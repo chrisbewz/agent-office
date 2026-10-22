@@ -36,6 +36,7 @@ export const floorHandlers = {
           ctx.toastAll(`🛗 ${who} is adding a floor for ${def.repo ?? def.name}…`);
         },
         c.accountId,
+        msg.host === 'gitlab' || msg.host === 'github' ? msg.host : undefined,
       )
       .then((r) => {
         ctx.floorsChanged();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { PROMPTS, PROMPT_IDS, PROMPT_MAX, fillPrompt, placeholders, promptText } from '../src/shared/prompts.js';
+import { PROMPTS, PROMPT_IDS, PROMPT_MAX, fillPrompt, placeholders, promptText, stationDefault } from '../src/shared/prompts.js';
 import { OfficePrompts, officePrompt, type PromptSource } from '../src/server/prompts.js';
 import { stationBrief } from '../src/server/stations.js';
 import { TaskQueue, type QueueWorkers } from '../src/server/queue.js';
@@ -155,4 +155,26 @@ test('the worktree note the queue adds can be rewritten, or left off', (t) => {
   const none = queueFixture(t, undefined, '');
   none.queue.add('Fix it', 'Ada');
   assert.equal(none.workers[0].prompt, 'Fix it');
+});
+
+test('a GitLab board brief names glab, and the GitHub one reads as it always did', () => {
+  assert.equal(
+    stationDefault('pulls'),
+    `You're the PR agent in Agent Office, a shared 3D office where a team works alongside coding agents. You stand at a kiosk by the 🔀 Pull Requests board, and whoever walks up types you a request. The first one is at the end of this message.\n\nYou look after this repository's pull requests with the gh CLI: sum them up and review them (gh pr view, gh pr diff, gh pr checks), comment, approve or request changes, merge when you're asked to, and close stale ones. Read a PR's code with gh pr diff rather than checking its branch out here. To get changes made on a PR, queue a task that tells the worker to check out that PR's branch in its worktree (gh pr checkout), make the fix and push it.\n\nYou're in the project's main checkout, which other people and workers use too: don't switch branches, commit, or leave edits in it. Work that needs code changed goes on the task queue, unless the person asks you for something else.\n\nThe task queue gives each task a fresh worker in its own git worktree, a few at a time; a task usually ends with a pull request. Use it with the office-queue command, which is on your PATH (it knows who you are, so don't call the office's HTTP API yourself):\n- See it: office-queue list (each task's id, status, title, worker and pull request)\n- Add a task: office-queue add --title "Short title" [--issue <number>], with the task's prompt on stdin in a quoted heredoc so nothing in it gets expanded. It prints the new task's id. With --issue the task is linked to that GitHub issue, which is assigned when the task starts.\n  office-queue add --title "Fix the login redirect" <<'EOF'\n  …the full prompt…\n  EOF\n- Take a waiting task off: office-queue remove <id>\n\nWhen you've done what was asked, say in a few lines what you did, with links. Then wait: the next request may come from someone else.\n\nThe request:`,
+  );
+  const gitlab = stationDefault('pulls', 'gitlab');
+  assert.match(gitlab, /merge requests with the glab CLI/);
+  assert.match(gitlab, /\(glab mr view, glab mr diff, glab mr checks\)/);
+  assert.match(gitlab, /\(glab mr checkout\)/);
+  assert.match(gitlab, /a task usually ends with a merge request/);
+  assert.match(gitlab, /linked to that GitLab issue/);
+  assert.doesNotMatch(gitlab, /gh pr|gh issue|gh CLI|GitHub|pull request/);
+  const issues = stationDefault('issues', 'gitlab');
+  assert.match(issues, /GitLab issues with the glab CLI/);
+  assert.doesNotMatch(issues, /GitHub|gh CLI/);
+  const queue = stationDefault('queue', 'gitlab');
+  assert.match(queue, /glab issue list only as far as it takes/);
+  assert.match(queue, /Link a task to its GitLab issue/);
+  assert.match(queue, /to open a merge request/);
+  assert.doesNotMatch(queue, /gh issue|GitHub issue|pull request/);
 });

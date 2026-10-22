@@ -25,6 +25,11 @@ interface Column<T> {
 const byUpdated = (a: { updatedAt: string }, b: { updatedAt: string }) => b.updatedAt.localeCompare(a.updatedAt);
 
 function githubErrorHint(error: string): string {
+  // The boards speak the same shape on either forge; only the CLI they shell out to differs.
+  if (store.floors.find((f) => f.id === store.floor)?.host === 'gitlab') {
+    if (/^Unknown JSON field:/i.test(error)) return 'The server is running an older GitLab CLI than this feature expected; update `glab` if the board still cannot load.';
+    return 'The server runs `glab` in the project directory — make sure it is installed and authenticated (glab auth login, or set GITLAB_TOKEN).';
+  }
   if (/^Unknown JSON field:/i.test(error)) return 'The server is running an older GitHub CLI than this feature expected; update `gh` if the board still cannot load.';
   return 'The server runs `gh` in the project directory — make sure it is installed and authenticated (gh auth login).';
 }
@@ -135,7 +140,8 @@ function card(n: number, title: string, meta: (Node | string)[], i: number, oncl
 export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActions) {
   const body = h('div.body');
   const status = h('span.board-status');
-  const refresh = h('button.btn', { title: 'Refresh from GitHub', onclick: () => net.send({ t: 'gh.refresh' }) }, '🔄 Refresh');
+  const forge = store.floors.find((f) => f.id === store.floor)?.host === 'gitlab' ? 'GitLab' : 'GitHub';
+  const refresh = h('button.btn', { title: `Refresh from ${forge}`, onclick: () => net.send({ t: 'gh.refresh' }) }, '🔄 Refresh');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const el = h('div.modal.board', { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' }, h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, refresh, close), body);
 
@@ -256,7 +262,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const caret = active instanceof HTMLInputElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
     body.replaceChildren();
     if (st.error && !st.items.length) {
-      body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, githubErrorHint(st.error))));
+      body.append(h('div.board-error', {}, `Couldn't load from ${forge}: ${st.error}`, h('br'), h('small', {}, githubErrorHint(st.error))));
       return;
     }
     const all = boardLabels(st.items);

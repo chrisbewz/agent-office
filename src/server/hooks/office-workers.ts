@@ -2,6 +2,8 @@ import type http from 'node:http';
 import { notLeaving } from '../leave-on-merge.js';
 import { findWorker, readHireRequest, readHomeRequest, readPrRequest, workerRow, type PullsView } from '../office-workers.js';
 import { gh } from '../github.js';
+import { glabApi } from '../gitlab.js';
+import { originApiPath } from '../forge.js';
 import type { Floor } from '../floor.js';
 import { nextFreeSeat } from '../../shared/layout.js';
 import type { WorkerInfo } from '../../shared/protocol.js';
@@ -20,7 +22,13 @@ async function pullOf(floor: Floor, n: number, repo?: string): Promise<{ number:
   let pr: { url: string; state: string } | undefined = listed;
   if (!pr) {
     try {
-      pr = JSON.parse(await gh(['pr', 'view', String(n), '--json', 'url,state'], floor.dir)) as { url: string; state: string };
+      if (floor.host === 'gitlab') {
+        const m = JSON.parse(await glabApi(floor.dir, `projects/${originApiPath(floor.dir)}/merge_requests/${n}`, undefined, [])) as { state: string; web_url: string };
+        // The boards' shape: OPEN, MERGED or CLOSED.
+        pr = { state: m.state === 'merged' ? 'MERGED' : m.state === 'closed' ? 'CLOSED' : 'OPEN', url: m.web_url };
+      } else {
+        pr = JSON.parse(await gh(['pr', 'view', String(n), '--json', 'url,state'], floor.dir)) as { url: string; state: string };
+      }
     } catch (err) {
       return `No pull request #${n} here: ${(err as Error).message}`;
     }

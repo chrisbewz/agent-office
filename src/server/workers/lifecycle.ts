@@ -102,7 +102,7 @@ export function reduceLifecycle(h: WorkerHandle, report: LifecycleReport, o: Lif
       if (report.source === 'clear') h.clearTask();
       info.activity = undefined;
       if (info.status === 'starting' || info.status === 'needs_input') h.setStatus('idle');
-      // A prompt its start couldn't take on the command line (a Muse resume): now it can.
+      // Prompts kept off the command line can be sent now that the session is ready.
       if (h.pendingPrompt) {
         const text = h.pendingPrompt;
         h.pendingPrompt = undefined;

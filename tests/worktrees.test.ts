@@ -75,6 +75,21 @@ test('a project ahead of origin (commits not pushed yet) still branches from its
   assert.equal(made.note, undefined);
 });
 
+test('an explicitly selected remote branch starts an isolated worktree without moving the floor checkout', (t) => {
+  const f = fixture(t);
+  f.git('checkout', '-qb', 'release/2.0');
+  f.commit('release.txt');
+  f.git('push', '-q', '-u', 'origin', 'release/2.0');
+  f.git('checkout', '-q', 'main');
+  const before = f.git('branch', '--show-current');
+  const trees = new Worktrees(f.dir);
+  const made = trees.create('rex-release', undefined, undefined, 'origin/release/2.0');
+  assert.ok(typeof made !== 'string', String(made));
+  assert.equal(made.from, 'release/2.0');
+  assert.equal(f.git('branch', '--show-current'), before);
+  assert.ok(existsSync(path.join(f.dir, made.path, 'release.txt')));
+});
+
 test("when both moved on, it starts from origin's and says what it left out", async (t) => {
   const f = fixture(t);
   const merged = f.merge('fix.txt');

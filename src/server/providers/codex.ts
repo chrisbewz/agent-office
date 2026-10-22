@@ -96,6 +96,8 @@ export const codex: ProviderAdapter<CodexState, CodexSetup> = {
     args = codexModelArgs(args, h.info.model, h.info.effort);
     args.push(...codexHookArgs(setup.hook), ...(setup.mcpScript ? codexMcpArgs(setup.mcpScript) : []), '--no-alt-screen');
     if (resumeSessionId) args.push('resume', resumeSessionId);
+    // SessionStart runs on the first turn, so it cannot be used to wake an idle interactive TUI.
+    // Pass the first message as the CLI prompt; later messages still go through the terminal.
     if (prompt) args.push('--', prompt);
     tracker(h.state).clear();
     return { args, rotateToken: true };

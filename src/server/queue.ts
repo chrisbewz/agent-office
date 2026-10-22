@@ -6,6 +6,7 @@ import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
 import { validateWorkerEffort, validateWorkerModel } from './agents.js';
 import { savedEffort, savedModel, takesEffort, takesModel } from '../shared/providers.js';
 import { PROMPTS } from '../shared/prompts.js';
+import type { RepoSource } from './workers/types.js';
 
 /** What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it. */
 export interface QueueWorkers {
@@ -16,11 +17,13 @@ export interface QueueWorkers {
   deskOccupied(deskId: string): boolean;
   /** How many rows the floor's back office is built out, for its desks (see WING). */
   wing?(): number;
-  spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string, effort?: AgentEffort, meeting?: undefined, owner?: string): WorkerInfo | string;
+  spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string, effort?: AgentEffort, meeting?: undefined, owner?: string, repos?: RepoSource[], via?: 'herald', sourceBranch?: string): WorkerInfo | string;
   /** Resolves with a line about what became of the worker's worktree. */
   kill(id: string): Promise<{ note?: string; error?: string }>;
   /** Fetches what a new worktree starts from; undefined when there's nothing to wait for (see Worktrees.fetch). */
   fetchBase?(): Promise<void> | undefined;
+  listBranches?(): string[];
+  currentBranch?(): string | undefined;
 }
 
 export interface QueueEvents {
@@ -77,7 +80,7 @@ export class TaskQueue {
   }
 
   state(): QueueState {
-    return { tasks: this.tasks.map((t) => ({ ...t })), maxWorkers: this.maxWorkers };
+    return { tasks: this.tasks.map((t) => ({ ...t })), maxWorkers: this.maxWorkers, sourceBranches: this.workers.listBranches?.() ?? [], defaultSourceBranch: this.workers.currentBranch?.() };
   }
 
   get limit(): number {
@@ -86,7 +89,7 @@ export class TaskQueue {
 
   /** Queues a task. With no `provider`, it runs on the office's default worker, model and effort included. */
   /** Queues a task; `owner` is the account adding it, whose sign-ins its worker will run on. */
-  add(prompt: string, by: string, title?: string, issue?: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, owner?: string): string | undefined {
+  add(prompt: string, by: string, title?: string, issue?: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, owner?: string, sourceBranch?: string): string | undefined {
     if (provider === undefined) ({ provider, model, effort } = this.workers.officeDefault ?? { provider: this.workers.defaultProvider });
     if (!isAgentProvider(provider) || (provider === 'custom' && this.workers.defaultProvider !== 'custom')) return 'Unknown agent provider';
     const modelError = validateWorkerModel('agent', provider, model);
@@ -107,6 +110,7 @@ export class TaskQueue {
       prompt: clean,
       addedBy: by,
       ...(owner ? { owner } : {}),
+      ...(sourceBranch ? { sourceBranch } : {}),
       addedAt: Date.now(),
       status: 'queued',
     };
@@ -155,7 +159,7 @@ export class TaskQueue {
     if (t.status !== 'done') return 'That task is still on the queue';
     if (t.issue !== undefined && this.tasks.some((x) => x !== t && x.issue === t.issue && x.status !== 'done')) return `Issue #${t.issue} is already on the queue`;
     this.tasks.splice(this.tasks.indexOf(t), 1);
-    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, title: t.title, prompt: t.prompt, addedBy: t.addedBy, owner: t.owner, addedAt: Date.now(), status: 'queued' };
+    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, title: t.title, prompt: t.prompt, addedBy: t.addedBy, owner: t.owner, sourceBranch: t.sourceBranch, addedAt: Date.now(), status: 'queued' };
     this.tasks.push(fresh);
     this.changed();
     this.pump();
@@ -334,7 +338,13 @@ export class TaskQueue {
       const desk = free ?? this.recycleDesk();
       if (!desk) break;
       const note = this.useWorktree ? this.events.worktreeNote?.() ?? PROMPTS['queue.worktree'].text : '';
-      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, note ? `${t.prompt}\n\n${note}` : t.prompt, this.useWorktree, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort, undefined, t.owner);
+      const source = t.sourceBranch ?? this.workers.currentBranch?.();
+      const target = source?.startsWith('refs/heads/') ? source.slice('refs/heads/'.length)
+        : source?.startsWith('refs/remotes/origin/') ? source.slice('refs/remotes/origin/'.length)
+          : source?.startsWith('origin/') ? source.slice('origin/'.length) : source;
+      const branchNote = source ? `Repository source branch: \`${source}\`. Start the task worktree from this branch and target pull requests at \`${target}\`. Keep the task's work branch separate.\n\n` : '';
+      const taskPrompt = `${branchNote}${note ? `${t.prompt}\n\n${note}` : t.prompt}`;
+      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, taskPrompt, this.useWorktree, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort, undefined, t.owner, [], undefined, t.sourceBranch);
       changed = true;
       if (typeof r === 'string') {
         t.status = 'done';
@@ -345,6 +355,8 @@ export class TaskQueue {
         continue;
       }
       t.status = 'running';
+      // Freeze the actual base used for this task so a retry cannot silently follow a later floor checkout.
+      t.sourceBranch = t.sourceBranch ?? r.worktree?.from ?? source;
       t.workerId = r.id;
       t.workerName = r.name;
       t.branch = r.worktree?.branch;
@@ -393,6 +405,7 @@ export class TaskQueue {
           prompt: s.prompt,
           addedBy: s.addedBy ?? '?',
           owner: typeof s.owner === 'string' && s.owner ? s.owner : undefined,
+          sourceBranch: typeof s.sourceBranch === 'string' ? s.sourceBranch : undefined,
           addedAt: s.addedAt ?? Date.now(),
           status: s.status === 'running' || s.status === 'done' ? s.status : 'queued',
           workerId: s.workerId,

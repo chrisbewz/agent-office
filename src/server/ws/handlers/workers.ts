@@ -163,7 +163,7 @@ export const workerHandlers = {
         if (own && !floor.github.pulls.items.some((p) => p.number === own.number)) setTimeout(() => void floor.github.refresh(), 3000);
       });
       for (const x of info?.repos ?? []) void ctx.floors.get(x.floor)?.github.refresh();
-    }));
+    }), undefined, floor);
   },
   'term.input'(ctx, c, msg) {
     const who = c.peer.name;

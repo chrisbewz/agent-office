@@ -58,10 +58,12 @@ export class Worktrees {
    * `slug`, which is in `root` (the worker's own floor, when that isn't this project). The path it
    * returns is relative to `root`.
    */
-  create(slug: string, sub?: string, root = this.dir): (Required<Omit<WorktreeRef, 'made'>> & { from?: string; note?: string }) | string {
+  create(slug: string, sub?: string, root = this.dir, sourceBranch?: string): (Required<Omit<WorktreeRef, 'made'>> & { from?: string; note?: string }) | string {
     try {
-      const from = this.currentBranch();
-      const { base, note } = this.startPoint(from);
+      const selected = sourceBranch ? this.resolveBranch(sourceBranch) : undefined;
+      if (sourceBranch && !selected) return `Source branch “${sourceBranch}” is unavailable or ambiguous. Refresh the repository and choose a listed local branch or origin branch.`;
+      const from = selected?.target ?? this.currentBranch();
+      const { base, note } = selected ? { base: selected.base } : this.startPoint(from);
       const rel = path.join(WORKTREES_DIR, slug, sub ?? '');
       const branch = `${BRANCH_PREFIX}${slug}`;
       this.gitSync(['worktree', 'add', '-b', branch, path.resolve(root, rel), base]);
@@ -69,6 +71,52 @@ export class Worktrees {
     } catch (err) {
       return `Could not create a git worktree: ${gitError(err)}`;
     }
+  }
+
+  /** Branches a user can choose, with remote names explicit so local/remote collisions are clear. */
+  listBranches(): string[] {
+    try {
+      return this.gitSync(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin'])
+        .split('\n').filter((b) => b && b !== 'refs/remotes/origin/HEAD').sort();
+    } catch { return []; }
+  }
+
+  private resolveBranch(name: string): { base: string; target: string } | undefined {
+    const branch = name.trim();
+    if (!branch || branch.startsWith('-')) return undefined;
+    // Fully-qualified refs keep unusual local names distinct from origin's short names.
+    const localName = branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : undefined;
+    const remoteName = branch.startsWith('refs/remotes/origin/')
+      ? branch.slice('refs/remotes/origin/'.length)
+      : branch.startsWith('origin/') ? branch.slice('origin/'.length) : undefined;
+    if (remoteName) {
+      try {
+        this.gitSync(['check-ref-format', '--branch', remoteName]);
+        if (this.hasOrigin()) this.gitSync(['fetch', '--quiet', '--no-tags', 'origin', remoteName]);
+        const base = this.gitSync(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${remoteName}^{commit}`]);
+        return { base, target: remoteName };
+      } catch { return undefined; }
+    }
+    if (localName) {
+      try {
+        this.gitSync(['check-ref-format', '--branch', localName]);
+        const base = this.gitSync(['rev-parse', '--verify', '--quiet', `refs/heads/${localName}^{commit}`]);
+        return { base, target: localName };
+      } catch { return undefined; }
+    }
+    try {
+      this.gitSync(['check-ref-format', '--branch', branch]);
+      const base = this.gitSync(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
+      return { base, target: branch };
+    } catch {
+      try { this.gitSync(['check-ref-format', '--branch', branch]); } catch { return undefined; }
+      /* Try the matching origin branch below. */
+    }
+    try {
+      if (this.hasOrigin()) this.gitSync(['fetch', '--quiet', '--no-tags', 'origin', branch]);
+      const base = this.gitSync(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}^{commit}`]);
+      return { base, target: branch };
+    } catch { return undefined; }
   }
 
   /**

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Building, type FloorDef } from '../src/server/building.js';
@@ -29,7 +30,39 @@ case "$1 $2" in
 esac
 `;
 
+// Windows can't exec the sh shim: execFile('gh') searches only .com/.exe/.bat/.cmd (and skips
+// .bat/.cmd candidates unless spawned through a shell, CVE-2024-27980). There `gh` is a copy of
+// node, so `gh repo view|clone …` runs the `repo` script node finds in its cwd, with the same
+// arguments the sh shim reads ($2/$3/$4 become argv[2]/[3]/[4]).
+const FAKE_REPO = `const { spawnSync } = require('node:child_process');
+const { existsSync } = require('node:fs');
+const [sub, name, dest] = process.argv.slice(2);
+const repos = process.env.FAKE_GH_REPOS;
+if (sub === 'view') {
+  if (!existsSync(repos + '/' + name + '.git')) {
+    console.error("GraphQL: Could not resolve to a Repository with the name '" + name + "'.");
+    process.exit(1);
+  }
+  console.log(JSON.stringify({ nameWithOwner: name, isEmpty: false }));
+} else if (sub === 'clone') {
+  process.stderr.write("Cloning into '" + dest + "'...\\n");
+  if (process.env.FAKE_GH_FAIL) {
+    process.stderr.write(process.env.FAKE_GH_FAIL + '\\nfatal: Could not read from remote repository.\\n');
+    process.exit(128);
+  } else if (process.env.FAKE_GH_HANG) {
+    setInterval(() => {}, 600000);
+  } else {
+    process.stderr.write('Receiving objects:  42% (42/100), 1.00 MiB | 512.00 KiB/s\\r');
+    if (process.env.FAKE_GH_DELAY) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_GH_DELAY) * 1000);
+    const git = spawnSync('git', ['clone', '-q', repos + '/' + name + '.git', dest], { stdio: 'ignore' });
+    if (git.error || git.status !== 0) process.exit(1);
+    spawnSync('git', ['-C', dest, 'remote', 'set-url', 'origin', 'https://github.com/' + name + '.git'], { stdio: 'ignore' });
+  }
+}
+`;
+
 const fast = { clone: { tickMs: 50, stallMs: 1500 } };
+
 
 function office(t: { after(fn: () => void): void }) {
   const root = mkdtempSync(path.join(tmpdir(), 'agent-office-clone-'));
@@ -56,12 +89,18 @@ function office(t: { after(fn: () => void): void }) {
   execFileSync('git', ['init', '-q', work]);
   writeFileSync(path.join(work, 'index.html'), '<h1>game</h1>');
   execFileSync('git', ['-C', work, 'add', '.']);
-  execFileSync('git', ['-C', work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'first']);
+  execFileSync('git', ['-C', work, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'first']);
   execFileSync('git', ['clone', '-q', '--bare', work, path.join(repos, 'acme', 'game.git')]);
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
   process.env.FAKE_GH_REPOS = repos;
   for (const k of ['FAKE_GH_DELAY', 'FAKE_GH_HANG', 'FAKE_GH_FAIL']) delete process.env[k];
   const projects = path.join(root, 'projects');
+  if (process.platform === 'win32') {
+    copyFileSync(process.execPath, path.join(bin, 'gh.exe'));
+    mkdirSync(path.join(projects, 'acme'), { recursive: true });
+    // The clone's and the view's cwd differ; node resolves `repo` against whichever it's handed.
+    for (const dir of [root, dataDir, projects, path.join(projects, 'acme')]) writeFileSync(path.join(dir, 'repo'), FAKE_REPO);
+  }
   /** The clones under way, as the office keeps them for the next one. */
   const saved = () => (existsSync(path.join(dataDir, 'cloning.json')) ? (JSON.parse(readFileSync(path.join(dataDir, 'cloning.json'), 'utf8')) as (FloorDef & { pid: number })[]) : []);
   const running = async () => {
@@ -82,9 +121,45 @@ const alive = (pid: number) => {
     return false;
   }
 };
+
+// Picking a running clone back up goes through POSIX process groups and ps (CloneRun.adopt refuses
+// both on Windows, where the office instead reports the clone stopped) — same gate as production.
+const groups = process.platform !== 'win32';
 const until = async (fn: () => boolean) => {
   for (let i = 0; i < 200 && !fn(); i++) await new Promise((r) => setTimeout(r, 25));
 };
+
+test('an explicit GitLab URL never clones the same path from GitHub', async (t) => {
+  const { root, dataDir, projects } = office(t);
+  if (process.platform === 'win32') {
+    copyFileSync(process.execPath, path.join(root, 'bin', 'glab.exe'));
+    writeFileSync(path.join(dataDir, 'api'), 'process.exit(1)');
+  } else {
+    writeFileSync(path.join(root, 'bin', 'glab'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  }
+  const building = new Building(dataDir, projects, fast);
+  const result = await building.add('https://gitlab.com/acme/game', 'Sam', () => {});
+  assert.equal(typeof result, 'string');
+  assert.deepEqual(building.list(), []);
+  assert.equal(existsSync(path.join(projects, 'acme', 'game', 'index.html')), false);
+});
+
+test('a GitHub checkout cannot be reused for a GitLab project with the same path', async (t) => {
+  const { root, dataDir, projects } = office(t);
+  if (process.platform === 'win32') {
+    copyFileSync(process.execPath, path.join(root, 'bin', 'glab.exe'));
+    writeFileSync(path.join(dataDir, 'api'), 'console.log(JSON.stringify({path_with_namespace: "acme/game"}))');
+  } else {
+    writeFileSync(path.join(root, 'bin', 'glab'), '#!/bin/sh\necho \'{"path_with_namespace":"acme/game"}\'\n', { mode: 0o755 });
+  }
+  const building = new Building(dataDir, projects, fast);
+  const first = await building.add('acme/game', 'Sam', () => {});
+  assert.equal(typeof first, 'object');
+  building.remove((first as FloorDef).id);
+  const result = await building.add('https://gitlab.com/acme/game', 'Sam', () => {});
+  assert.match(String(result), /isn't a checkout of gitlab\/acme\/game/);
+  assert.deepEqual(building.list(), []);
+});
 
 test("git's progress reads as a step, how far and how fast", () => {
   const out = "Cloning into '/x/acme/game'...\nremote: Enumerating objects: 2742, done.\nremote: Counting objects: 100% (5/5), done.\nReceiving objects:  12% (330/2742), 40.12 MiB | 1.52 MiB/s\rReceiving objects:  64% (1755/2742), 231.40 MiB | 1.50 MiB/s\r";
@@ -153,7 +228,7 @@ test('a clone can be stopped by an admin or whoever added it', async (t) => {
   assert.equal(building.cancel(id, 'again', () => true), 'No such floor');
 });
 
-test('a restart mid-clone picks the clone back up, and it becomes its floor', async (t) => {
+test('a restart mid-clone picks the clone back up, and it becomes its floor', { skip: groups ? false : 'CloneRun.adopt needs POSIX process groups and ps, which Windows lacks' }, async (t) => {
   const { dataDir, projects, saved, running } = office(t);
   process.env.FAKE_GH_DELAY = '1';
   const first = new Building(dataDir, projects, fast);

@@ -36,6 +36,8 @@ export interface FloorInfo {
   name: string;
   /** owner/name on GitHub. */
   repo?: string;
+  /** The forge this floor's repository lives on, when it isn't GitHub. */
+  host?: 'gitlab';
   /** Its checkout on the office's machine. */
   dir: string;
   /** The branch that checkout is on ('HEAD' when detached); none when it isn't a git checkout. */
@@ -87,6 +89,7 @@ export interface ProjectsDirState {
 export interface RepoChoice {
   /** owner/name */
   name: string;
+  host?: 'gitlab';
   description?: string;
   private: boolean;
   /** ISO time of the last push. */
@@ -136,7 +139,7 @@ export type FloorClientMsg =
   /** The repositories that could become a floor; answered with `floor.repos`. */
   | { t: 'floor.repos'; refresh?: boolean }
   /** Clone a repository and make it a new floor; answered with `floor.added` once it's there. */
-  | { t: 'floor.add'; repo: string }
+  | { t: 'floor.add'; repo: string; host?: 'github' | 'gitlab' }
   /** Stop a floor's clone before it's there (admins, or whoever added it); the one who added it hears `floor.added` with why. */
   | { t: 'floor.cancel'; floor: string }
   /** Take a floor off the building (admins only). Its checkout stays on disk; everyone on it rides to another floor. */

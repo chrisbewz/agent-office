@@ -8,7 +8,7 @@ import { h, openModal, timeAgo, toast, type Modal } from './dom';
 import { confirmDialog } from './prompt';
 
 // The elevator's panel: a button for every floor (every project), and "add a project", which clones
-// one of the repositories the office's gh login can see and makes it a new floor. The first time
+// one of the repositories the office's forge login can see and makes it a new floor. The first time
 // the office runs there are no floors, and this is where you start. Admins can take a floor off the
 // building here too; its checkout stays on disk. Under the floors, it goes down to the garage.
 
@@ -30,7 +30,7 @@ export interface ElevatorOptions {
 const SHOWN = 60;
 /** Ask gh for the repositories again after this long. */
 const REPOS_STALE_MS = 5 * 60_000;
-/** Longer than the office takes to ask GitHub about a repository before its clone starts. */
+/** Longer than the office takes to ask the forge about a repository before its clone starts. */
 const START_MS = 60_000;
 
 /** Panels waiting on a clone; each says whether the answer was for it. */
@@ -65,6 +65,7 @@ export function openElevator(opts: ElevatorOptions): void {
   const { net } = opts;
   let filter = '';
   let selected: string | null = null;
+  let selectedHost: 'github' | 'gitlab' | undefined;
   let adding: string | null = null;
   /** The office has started cloning `adding` (it's on the floor list). */
   let seen = false;
@@ -80,7 +81,7 @@ export function openElevator(opts: ElevatorOptions): void {
   const listEl = h('div.repo-list', { role: 'listbox', 'aria-label': 'Repositories' });
   const statusEl = h('div');
   const addBtn = h('button.btn.primary', { type: 'button' }, '🛗 Add floor');
-  const refreshBtn = h('button.btn', { type: 'button', title: 'Ask GitHub for the list again' }, '↻');
+  const refreshBtn = h('button.btn', { type: 'button', title: 'Ask GitHub or GitLab for the list again' }, '↻');
   const close = h('button.btn.close', { type: 'button', 'aria-label': 'Close', title: 'Close (Esc)' }, '✕');
 
   // Where clones go. Admins can move it right here: the first project is when it matters.
@@ -116,6 +117,7 @@ export function openElevator(opts: ElevatorOptions): void {
 
   /** What "Add floor" would add: the row picked, else what's typed if it's owner/name. */
   const choice = (): string | undefined => selected ?? normalizeRepo(filter);
+  const choiceHost = (): 'github' | 'gitlab' | undefined => selected ? selectedHost : /^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?gitlab\.com[/:]/i.test(filter.trim()) ? 'gitlab' : /^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?github\.com[/:]/i.test(filter.trim()) ? 'github' : undefined;
 
   const floorButton = (f: FloorInfo, i: number) => {
     // Down in the garage, your floor is somewhere to go back up to.
@@ -226,13 +228,19 @@ export function openElevator(opts: ElevatorOptions): void {
   };
 
   const repoRow = (r: RepoChoice) => {
-    const floor = store.floors.find((f) => sameRepo(f.repo, r.name));
+    const floor = store.floors.find((f) => sameRepo(f.repo, r.name) && (f.host ?? 'github') === (r.host ?? 'github'));
+    // The project's name leads; its groups sit under it, dimmer, both truncated to the full name
+    // on hover (and the description keeps its own, too).
+    const slash = r.name.lastIndexOf('/');
+    const project = slash < 0 ? r.name : r.name.slice(slash + 1);
+    const owner = slash < 0 ? '' : r.name.slice(0, slash);
     const row = h(
       'div.repo',
-      { role: 'option', class: selected && sameRepo(selected, r.name) ? 'sel' : '', 'aria-selected': String(!!selected && sameRepo(selected, r.name)), title: r.description ?? r.name },
-      h('span.nm', {}, r.name),
+      { role: 'option', class: selected && sameRepo(selected, r.name) && selectedHost === (r.host ?? 'github') ? 'sel' : '', 'aria-selected': String(!!selected && sameRepo(selected, r.name) && selectedHost === (r.host ?? 'github')), title: r.description ? `${r.name} — ${r.description}` : r.name },
+      h('div.idn', { title: r.name }, h('span.nm', {}, project), owner ? h('span.own', {}, owner) : null),
       r.private ? h('span', { title: 'Private' }, '🔒') : null,
-      h('span.desc', {}, r.description ?? ''),
+      h('span.pill', {}, r.host === 'gitlab' ? 'GitLab' : 'GitHub'),
+      h('span.desc', { title: r.description ?? '' }, r.description ?? ''),
       floor ? h('span.pill', {}, floor.id === store.floor ? 'you are here' : `floor ${store.floors.indexOf(floor) + 1}`) : r.pushedAt ? h('span.when', {}, timeAgo(r.pushedAt)) : null,
     );
     row.addEventListener('click', () => {
@@ -246,10 +254,11 @@ export function openElevator(opts: ElevatorOptions): void {
         return;
       }
       selected = r.name;
+      selectedHost = r.host ?? 'github';
       renderAdd();
     });
     row.addEventListener('dblclick', () => {
-      if (!floor) add(r.name);
+      if (!floor) add(r.name, r.host ?? 'github');
     });
     return row;
   };
@@ -274,28 +283,31 @@ export function openElevator(opts: ElevatorOptions): void {
     const matches = r.list.filter((x) => !q || x.name.toLowerCase().includes(q) || (x.description ?? '').toLowerCase().includes(q));
     const rows: HTMLElement[] = [];
     // owner/name that isn't in the list (someone else's public repository): offer it anyway.
-    if (typed && !r.list.some((x) => sameRepo(x.name, typed))) rows.push(repoRow({ name: typed, private: false, description: 'Not in your list — the office will try to clone it' }));
+    if (typed && !r.list.some((x) => sameRepo(x.name, typed) && (!choiceHost() || (x.host ?? 'github') === choiceHost()))) rows.push(repoRow({ name: typed, host: choiceHost() === 'gitlab' ? 'gitlab' : undefined, private: false, description: 'Not in your list — the office will try to clone it' }));
     rows.push(...matches.slice(0, SHOWN).map(repoRow));
-    if (!rows.length) rows.push(h('p.empty', { style: 'padding:10px' }, r.loading ? 'Asking GitHub for your repositories…' : r.error ? '' : q ? 'Nothing matches. Type owner/name to clone any repository.' : 'No repositories.'));
+    if (!rows.length) rows.push(h('p.empty', { style: 'padding:10px' }, r.loading ? 'Asking the forge about your repositories…' : r.error ? '' : q ? 'Nothing matches. Type owner/name to clone any repository.' : 'No repositories.'));
     if (matches.length > SHOWN) rows.push(h('p.empty', { style: 'padding:8px 10px' }, `…and ${matches.length - SHOWN} more — type to narrow it down`));
     listEl.replaceChildren(...rows);
     const pick = choice();
     const dest = pick ? `${store.projectsDir.dir}/${pick}` : `${store.projectsDir.dir}/<owner>/<repo>`;
     const change = store.me.admin ? h('button.btn.dir-change', { type: 'button', title: 'Clone new projects into another folder on the office’s machine' }, '📁 Change folder') : null;
     change?.addEventListener('click', () => editDir(true));
-    // While it clones: how far it's got (the office asks GitHub about it first).
+    // While it clones: how far it's got (the office asks the forge about it first).
     const on = addingFloor();
     const lines = adding
       ? [
-          h('p.note.busy', {}, on ? `⏳ Cloning ${on.repo ?? adding} into ${store.projectsDir.dir}/${on.repo ?? adding}` : `⏳ Asking GitHub about ${adding}…`),
+          h('p.note.busy', {}, on ? `⏳ Cloning ${on.repo ?? adding} into ${store.projectsDir.dir}/${on.repo ?? adding}` : `⏳ Asking the forge about ${adding}…`),
           on ? cloneBar(on.clone) : null,
           on ? h('p.note', {}, [cloneStep(on.clone), on.clone?.detail].filter(Boolean).join(' · ')) : null,
           h('p.note', {}, 'You can close this and carry on: everyone hears when the new floor opens.'),
         ]
-      : [h('p.note', {}, `Cloned into ${dest} with this machine's gh login. Everything on the new floor works in that checkout.`, change)];
+      : [h('p.note', {}, `Cloned into ${dest} with this machine's forge login. Everything on the new floor works in that checkout.`, change)];
     statusEl.replaceChildren(...lines.filter((l): l is HTMLElement => !!l), ...[r.error, error].filter(Boolean).map((e) => h('p.err', {}, e)));
     addBtn.disabled = !!adding || !pick || store.floors.some((f) => sameRepo(f.repo, pick));
-    addBtn.textContent = adding ? '⏳ Cloning…' : pick ? `🛗 Add ${pick}` : '🛗 Add floor';
+    // The button reads the project's name; its whole path rides the hover tooltip.
+    const pickName = pick ? pick.slice(pick.lastIndexOf('/') + 1) : '';
+    addBtn.title = pick ? `Clones ${pick} into ${store.projectsDir.dir}` : '';
+    addBtn.textContent = adding ? '⏳ Cloning…' : pick ? `🛗 Add ${pickName}` : '🛗 Add floor';
     input.disabled = !!adding;
     if (!built) {
       built = true;
@@ -312,13 +324,13 @@ export function openElevator(opts: ElevatorOptions): void {
   /** The floor being added, once the office is cloning it (and after, when it's there). */
   const addingFloor = () => (adding ? store.floors.find((f) => sameRepo(f.repo, adding!)) : undefined);
 
-  const add = (repo: string) => {
+  const add = (repo: string, host?: 'github' | 'gitlab') => {
     if (adding) return;
     adding = repo;
     seen = false;
     error = '';
     renderAdd();
-    net.send({ t: 'floor.add', repo });
+    net.send({ t: 'floor.add', repo, host });
     // The office went away before it started (a restart): don't wait forever.
     clearTimeout(startTimer);
     startTimer = window.setTimeout(() => {
@@ -372,11 +384,11 @@ export function openElevator(opts: ElevatorOptions): void {
     const q = filter.trim().toLowerCase();
     const matches = store.repos.list.filter((x) => !store.floors.some((f) => sameRepo(f.repo, x.name)) && (x.name.toLowerCase().includes(q) || (x.description ?? '').toLowerCase().includes(q)));
     const pick = choice() ?? (q && matches.length === 1 ? matches[0].name : undefined);
-    if (pick) add(pick);
+    if (pick) add(pick, choice() ? choiceHost() : matches[0]?.host ?? 'github');
   });
   addBtn.addEventListener('click', () => {
     const pick = choice();
-    if (pick) add(pick);
+    if (pick) add(pick, choiceHost());
   });
   refreshBtn.addEventListener('click', () => {
     store.repos = { ...store.repos, loading: true, error: undefined };

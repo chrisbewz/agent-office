@@ -643,6 +643,7 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   assert.equal(workers.handleCodexHook(worker.id, 'wrong', 'SessionStart', { session_id: 'codex-root' }), false);
   assert.equal(hook('SessionStart', { source: 'startup' }), true);
   assert.equal(worker.status, 'idle');
+  assert.equal(first.stdin, undefined, 'the first task is supplied to Codex at launch');
   assert.equal(hook('UserPromptSubmit', { prompt: 'Implement the actual task' }), true);
   assert.equal(worker.status, 'working');
   assert.equal(hook('PreToolUse', { tool_name: 'exec_command', tool_use_id: 'call-permission' }), true);
