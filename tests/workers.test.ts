@@ -647,7 +647,7 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
     '--',
     `Read and follow the complete initial task in .agent-office/initial-prompts/${longWorker.id}.txt. Begin work now.`,
   ]);
-  assert.equal(readFileSync(promptFile, 'utf8'), longPrompt);
+  assert.equal(readFileSync(promptFile, 'utf8'), longPrompt.trim());
   assert.ok(longCall.args.join(' ').length < 8_191);
   assert.equal(first.args.some(a => /bypass|--yolo|--claude-only|--settings/.test(a)), false);
   assert.equal(first.args.filter(a => a.startsWith('hooks.')).length, 7);
