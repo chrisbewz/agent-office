@@ -682,8 +682,8 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   t.after(() => restored.shutdown());
   // Wakes the workers from before the restart (see WorkerManager.start).
   await restored.start();
-  const nextCalls = await waitFor(f.read, x => x.filter(r => r.kind === 'codex' && !r.stdin).length >= 2);
-  const next = nextCalls.filter(r => r.kind === 'codex' && !r.stdin).at(-1)!;
+  const nextCalls = await waitFor(f.read, x => x.some(r => r.kind === 'codex' && r.env.workerId === worker.id && r.args.includes('resume')));
+  const next = nextCalls.find(r => r.kind === 'codex' && r.env.workerId === worker.id && r.args.includes('resume'))!;
   assert.deepEqual(next.args.slice(-2), ['resume', 'codex-root']);
   assert.notEqual(next.env.hookToken, token);
   assert.equal(restored.get(worker.id)?.provider, 'codex');
