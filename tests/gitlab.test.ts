@@ -346,6 +346,11 @@ test('repoOn reads the forges off remote URLs', () => {
   }
 });
 
+test('normalizeRepo rejects project paths that can be interpreted as CLI options', () => {
+  assert.equal(normalizeRepo('--help/project'), undefined);
+  assert.equal(normalizeRepo('gitlab.com/-group/project'), undefined);
+});
+
 test('normalizeRepo takes GitLab project paths and URLs too', () => {
   assert.equal(normalizeRepo('https://gitlab.com/group/app'), 'group/app');
   assert.equal(normalizeRepo('gitlab.com/group/sub/app'), 'group/sub/app');
