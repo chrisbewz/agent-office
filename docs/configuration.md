@@ -67,6 +67,8 @@ agent-office tunnel [office@address | url] [--port <n>] [--office-port <n>] [--n
 
 A floor whose git origin is on GitLab serves its boards from GitLab instead of GitHub: issues and merge requests, with comments, labels, closing, merging (squashed through the API's own squash flag), the merge gong and the PR window's diff. It picks the forge from the floor's origin remote, so a `gitlab.com` checkout gets GitLab boards and everything else gets GitHub. To add one, paste a `gitlab.com` URL in the elevator or type the project path — groups may nest, as in `group/sub/project` — and the office clones it through `glab`. The picker lists `glab`'s projects alongside your `gh` ones.
 
+The picker labels each forge. Use a GitLab URL or select its GitLab entry when the same project path exists on both forges; a bare path tries GitHub first. Projects with the same path share a checkout destination, so move an existing checkout out of the way before adding the other one.
+
 The office talks to GitLab through the **GitLab CLI**'s API passthrough, so `glab` owns the sign-in: install it and run `glab auth login`, or set `GITLAB_TOKEN`. Either one is enough; the CLI reads the token itself. For a self-hosted instance, set `GITLAB_HOST` to its host (like `gitlab.example.com`) and sign in to it the same way.
 
 There are no per-user GitLab sign-ins yet. On a GitLab floor the office acts as itself, with the machine's `glab` login or `GITLAB_TOKEN`, whether you're on the office password or your own account — so comments, merges and claimed issues show up under whoever that token belongs to, not you. GitHub floors keep acting as you through **🔐 Your sign-ins**.

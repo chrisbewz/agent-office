@@ -244,12 +244,13 @@ async function pickProjects(building: Building, login: string) {
     if (!answer) return;
     let pick: string | undefined;
     if (/^\d+$/.test(answer)) {
-      pick = shown[Number(answer) - 1]?.name;
+      const selected = shown[Number(answer) - 1];
+      pick = selected ? `${selected.host === 'gitlab' ? 'gitlab.com' : 'github.com'}/${selected.name}` : undefined;
       if (!pick) {
         console.log(`     ✗ There's no ${answer} in the list`);
         continue;
       }
-    } else pick = normalizeRepo(answer);
+    } else pick = normalizeRepo(answer) ? answer : undefined;
     if (!pick) {
       const q = answer.toLowerCase();
       const matches = repos.filter((r) => r.name.toLowerCase().includes(q) || (r.description ?? '').toLowerCase().includes(q));
@@ -285,7 +286,7 @@ function printRepos(list: RepoChoice[], building: Building) {
   const floors = building.list();
   list.forEach((r, i) => {
     const note = floors.some((f) => sameRepo(f.repo, r.name)) ? '(a floor already)' : [r.private ? 'private' : '', r.description ?? ''].filter(Boolean).join(' · ');
-    const line = `    ${String(i + 1).padStart(2)}. ${r.name.padEnd(nameWidth)}  ${note}`.trimEnd();
+    const line = `    ${String(i + 1).padStart(2)}. ${r.name.padEnd(nameWidth)}  ${r.host === 'gitlab' ? 'GitLab' : 'GitHub'}  ${note}`.trimEnd();
     console.log(line.length > width ? `${line.slice(0, width - 1)}…` : line);
   });
 }

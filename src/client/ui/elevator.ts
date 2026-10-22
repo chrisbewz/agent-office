@@ -65,6 +65,7 @@ export function openElevator(opts: ElevatorOptions): void {
   const { net } = opts;
   let filter = '';
   let selected: string | null = null;
+  let selectedHost: 'github' | 'gitlab' | undefined;
   let adding: string | null = null;
   /** The office has started cloning `adding` (it's on the floor list). */
   let seen = false;
@@ -116,6 +117,7 @@ export function openElevator(opts: ElevatorOptions): void {
 
   /** What "Add floor" would add: the row picked, else what's typed if it's owner/name. */
   const choice = (): string | undefined => selected ?? normalizeRepo(filter);
+  const choiceHost = (): 'github' | 'gitlab' | undefined => selected ? selectedHost : /^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?gitlab\.com[/:]/i.test(filter.trim()) ? 'gitlab' : /^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?github\.com[/:]/i.test(filter.trim()) ? 'github' : undefined;
 
   const floorButton = (f: FloorInfo, i: number) => {
     // Down in the garage, your floor is somewhere to go back up to.
@@ -226,7 +228,7 @@ export function openElevator(opts: ElevatorOptions): void {
   };
 
   const repoRow = (r: RepoChoice) => {
-    const floor = store.floors.find((f) => sameRepo(f.repo, r.name));
+    const floor = store.floors.find((f) => sameRepo(f.repo, r.name) && (f.host ?? 'github') === (r.host ?? 'github'));
     // The project's name leads; its groups sit under it, dimmer, both truncated to the full name
     // on hover (and the description keeps its own, too).
     const slash = r.name.lastIndexOf('/');
@@ -234,9 +236,10 @@ export function openElevator(opts: ElevatorOptions): void {
     const owner = slash < 0 ? '' : r.name.slice(0, slash);
     const row = h(
       'div.repo',
-      { role: 'option', class: selected && sameRepo(selected, r.name) ? 'sel' : '', 'aria-selected': String(!!selected && sameRepo(selected, r.name)), title: r.description ? `${r.name} — ${r.description}` : r.name },
+      { role: 'option', class: selected && sameRepo(selected, r.name) && selectedHost === (r.host ?? 'github') ? 'sel' : '', 'aria-selected': String(!!selected && sameRepo(selected, r.name) && selectedHost === (r.host ?? 'github')), title: r.description ? `${r.name} — ${r.description}` : r.name },
       h('div.idn', { title: r.name }, h('span.nm', {}, project), owner ? h('span.own', {}, owner) : null),
       r.private ? h('span', { title: 'Private' }, '🔒') : null,
+      h('span.pill', {}, r.host === 'gitlab' ? 'GitLab' : 'GitHub'),
       h('span.desc', { title: r.description ?? '' }, r.description ?? ''),
       floor ? h('span.pill', {}, floor.id === store.floor ? 'you are here' : `floor ${store.floors.indexOf(floor) + 1}`) : r.pushedAt ? h('span.when', {}, timeAgo(r.pushedAt)) : null,
     );
@@ -251,10 +254,11 @@ export function openElevator(opts: ElevatorOptions): void {
         return;
       }
       selected = r.name;
+      selectedHost = r.host ?? 'github';
       renderAdd();
     });
     row.addEventListener('dblclick', () => {
-      if (!floor) add(r.name);
+      if (!floor) add(r.name, r.host ?? 'github');
     });
     return row;
   };
@@ -279,7 +283,7 @@ export function openElevator(opts: ElevatorOptions): void {
     const matches = r.list.filter((x) => !q || x.name.toLowerCase().includes(q) || (x.description ?? '').toLowerCase().includes(q));
     const rows: HTMLElement[] = [];
     // owner/name that isn't in the list (someone else's public repository): offer it anyway.
-    if (typed && !r.list.some((x) => sameRepo(x.name, typed))) rows.push(repoRow({ name: typed, private: false, description: 'Not in your list — the office will try to clone it' }));
+    if (typed && !r.list.some((x) => sameRepo(x.name, typed) && (!choiceHost() || (x.host ?? 'github') === choiceHost()))) rows.push(repoRow({ name: typed, host: choiceHost() === 'gitlab' ? 'gitlab' : undefined, private: false, description: 'Not in your list — the office will try to clone it' }));
     rows.push(...matches.slice(0, SHOWN).map(repoRow));
     if (!rows.length) rows.push(h('p.empty', { style: 'padding:10px' }, r.loading ? 'Asking the forge about your repositories…' : r.error ? '' : q ? 'Nothing matches. Type owner/name to clone any repository.' : 'No repositories.'));
     if (matches.length > SHOWN) rows.push(h('p.empty', { style: 'padding:8px 10px' }, `…and ${matches.length - SHOWN} more — type to narrow it down`));
@@ -320,13 +324,13 @@ export function openElevator(opts: ElevatorOptions): void {
   /** The floor being added, once the office is cloning it (and after, when it's there). */
   const addingFloor = () => (adding ? store.floors.find((f) => sameRepo(f.repo, adding!)) : undefined);
 
-  const add = (repo: string) => {
+  const add = (repo: string, host?: 'github' | 'gitlab') => {
     if (adding) return;
     adding = repo;
     seen = false;
     error = '';
     renderAdd();
-    net.send({ t: 'floor.add', repo });
+    net.send({ t: 'floor.add', repo, host });
     // The office went away before it started (a restart): don't wait forever.
     clearTimeout(startTimer);
     startTimer = window.setTimeout(() => {
@@ -380,11 +384,11 @@ export function openElevator(opts: ElevatorOptions): void {
     const q = filter.trim().toLowerCase();
     const matches = store.repos.list.filter((x) => !store.floors.some((f) => sameRepo(f.repo, x.name)) && (x.name.toLowerCase().includes(q) || (x.description ?? '').toLowerCase().includes(q)));
     const pick = choice() ?? (q && matches.length === 1 ? matches[0].name : undefined);
-    if (pick) add(pick);
+    if (pick) add(pick, choice() ? choiceHost() : matches[0]?.host ?? 'github');
   });
   addBtn.addEventListener('click', () => {
     const pick = choice();
-    if (pick) add(pick);
+    if (pick) add(pick, choiceHost());
   });
   refreshBtn.addEventListener('click', () => {
     store.repos = { ...store.repos, loading: true, error: undefined };

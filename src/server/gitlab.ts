@@ -531,6 +531,7 @@ export async function gitlabRepos(cwd: string): Promise<RepoChoice[]> {
         if (!name) continue;
         repos.push({
           name,
+          host: 'gitlab',
           description: typeof p.description === 'string' && p.description ? p.description.slice(0, 200) : undefined,
           private: typeof p.visibility === 'string' && p.visibility !== 'public',
           pushedAt: typeof p.last_activity_at === 'string' ? p.last_activity_at : undefined,
