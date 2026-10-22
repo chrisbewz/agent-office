@@ -12,10 +12,12 @@ declare module '../../world/types' {
   }
 }
 
-/** The project on GitHub, from the floor's origin remote, when that's where it is. */
+/** The project on GitHub or GitLab, from the floor's origin remote, when that's where it is. */
 function githubUrl(remote?: string): string | undefined {
   const m = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remote ?? '');
-  return m ? `https://github.com/${m[1]}` : undefined;
+  if (m) return `https://github.com/${m[1]}`;
+  const g = /gitlab\.com[:/]([^/\s]+?)(?:\.git)?\/?$/.exec(remote ?? '');
+  return g ? `https://gitlab.com/${g[1]}` : undefined;
 }
 
 export function installBookshelf(ctx: Ctx) {

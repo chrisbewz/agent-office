@@ -5,8 +5,11 @@
 
 import type { StationKind } from '../shared/layout.js';
 import { officePrompt, type PromptSource } from './prompts.js';
+import { stationDefault, type PromptHost } from '../shared/prompts.js';
 
-export function stationBrief(kind: StationKind, prompts?: PromptSource): string {
+/** A board agent's brief: its rewrite from ⚙️ Settings, or the default written for its floor's forge. */
+export function stationBrief(kind: StationKind, prompts?: PromptSource, host: PromptHost = 'github'): string {
+  if (host !== 'github') return prompts?.text(`station.${kind}`) ?? stationDefault(kind, host);
   return officePrompt(prompts, `station.${kind}`);
 }
 

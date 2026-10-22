@@ -2,6 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, fstatSync, openSync, readSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { CloneProgress } from '../shared/protocol.js';
+import type { GitHost } from './forge.js';
 
 // One `gh repo clone`, run so the office can see how it's getting on. git's progress goes to a log
 // file, which the office reads every second: that says how far along it is, and a log that stops
@@ -96,29 +97,41 @@ export class CloneRun {
     this.timer = setInterval(() => this.tick(), opts.tickMs ?? 1000);
   }
 
-  /** Starts `gh repo clone repo dest`, writing to `log`. Resolves once it's running, or to why it couldn't start. */
-  static start(repo: string, dest: string, log: string, opts: CloneRunOptions = {}): Promise<CloneRun | string> {
+  /**
+   * Starts `gh repo clone repo dest` (or `glab repo clone` on GitLab), writing to `log`. Resolves
+   * once it's running, or to why it couldn't start.
+   */
+  static start(repo: string, dest: string, log: string, opts: CloneRunOptions = {}, host: GitHost = 'github'): Promise<CloneRun | string> {
     let fd: number;
     try {
       fd = openSync(log, 'w', 0o600);
     } catch (err) {
       return Promise.resolve(`Couldn't write ${log}: ${(err as Error).message}`);
     }
+    const cli = host === 'gitlab' ? 'glab' : 'gh';
     return new Promise((resolve) => {
       let child: ChildProcess;
       try {
-        child = spawn('gh', ['repo', 'clone', repo, dest, '--', '--progress'], {
+        child = spawn(cli, ['repo', 'clone', repo, dest, '--', '--progress'], {
           cwd: path.dirname(dest),
           detached: GROUPS,
           stdio: ['ignore', fd, fd],
           windowsHide: true,
           // No prompts: nobody would see them. What would have asked says so and fails instead.
-          env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1' },
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', GL_PROMPT_DISABLED: '1' },
         });
       } finally {
         closeSync(fd);
       }
-      child.once('error', (err: NodeJS.ErrnoException) => resolve(err.code === 'ENOENT' ? "The GitHub CLI (gh) isn't installed on the office's machine" : `Couldn't run gh: ${err.message}`));
+      child.once('error', (err: NodeJS.ErrnoException) =>
+        resolve(
+          err.code === 'ENOENT'
+            ? host === 'gitlab'
+              ? "The GitLab CLI (glab) isn't installed on the office's machine"
+              : "The GitHub CLI (gh) isn't installed on the office's machine"
+            : `Couldn't run ${cli}: ${err.message}`,
+        ),
+      );
       child.once('spawn', () => {
         const run = new CloneRun(child.pid!, log, child, opts);
         child.once('exit', (code) => run.end(code));

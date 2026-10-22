@@ -6,6 +6,8 @@ import type { WorkerInfo } from '../../shared/protocol.js';
 import { DESK_BY_ID } from '../../shared/layout.js';
 import { isBusy } from '../../shared/status.js';
 import { gh } from '../github.js';
+import { glabApi } from '../gitlab.js';
+import { originApiPath, originHost } from '../forge.js';
 import type { GhAs } from '../signins.js';
 import { Worktrees } from '../worktrees.js';
 import { run } from './process.js';
@@ -18,11 +20,12 @@ const PR_TASK_MAX = 2500;
 /** Around the list of a change's pull requests in each of their descriptions, so it can be brought up to date. */
 const RELATED_START = '<!-- agent-office:related -->';
 const RELATED_END = '<!-- /agent-office:related -->';
-/** `gh pr create` being run, alone or in a longer line: not one that only names it (a grep for it, a quoted string). */
-const CREATES_PR = /(?:^|[\s;&|(])gh\s+pr\s+create\b/;
+/** `gh pr create` or `glab mr create` being run, alone or in a longer line: not one that only names it (a grep for it, a quoted string). */
+const CREATES_PR = /(?:^|[\s;&|(])(?:gh\s+pr|glab\s+mr)\s+create\b/;
 /** How many of the pull requests a worker opened before its latest are remembered. */
 const MAX_PAST_PRS = 20;
-const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g;
+/** A pull request's URL on either forge: GitHub's /pull/12, GitLab's /-/merge_requests/12 (its groups may nest). */
+const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)|https:\/\/[^/\s]+\/((?:[\w.-]+\/)+[\w.-]+)\/-\/merge_requests\/(\d+)/g;
 
 /**
  * The pull request a worker opened itself, read off a shell command it ran and what that printed:
@@ -32,17 +35,28 @@ const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g;
 export function ownPr(command: unknown, output: string): { repo: string; number: number; url: string } | undefined {
   if (typeof command !== 'string' || !CREATES_PR.test(command)) return undefined;
   const last = [...output.matchAll(PR_URL)].pop();
-  return last && { repo: last[1], number: Number(last[2]), url: last[0] };
+  if (!last) return undefined;
+  // The GitHub alternative owns groups 1–2, the GitLab one 3–4.
+  return last[2] !== undefined ? { repo: last[1], number: Number(last[2]), url: last[0] } : { repo: last[3], number: Number(last[4]), url: last[0] };
 }
 
 async function findOpenPr(branch: string, cwd: string): Promise<{ number: number; url: string } | undefined> {
+  if (originHost(cwd) === 'gitlab') {
+    const list = JSON.parse(await glabApi(cwd, `projects/${originApiPath(cwd)}/merge_requests?state=opened&source_branch=${encodeURIComponent(branch)}&per_page=1`, undefined, [])) as { iid: number; web_url: string }[];
+    return list[0] ? { number: list[0].iid, url: list[0].web_url } : undefined;
+  }
   const out = await gh(['pr', 'list', '--head', branch, '--state', 'open', '--limit', '1', '--json', 'number,url'], cwd);
   const found = (JSON.parse(out || '[]') as { number: number; url: string }[])[0];
   return found ? { number: found.number, url: found.url } : undefined;
 }
 
-/** `gh pr create` for a pushed branch; resolves to the new pull request. */
+/** `gh pr create`, or a GitLab merge request through its API, for a pushed branch; resolves to the new pull request. */
 async function createPr(branch: string, base: string | undefined, title: string, body: string, cwd: string, as?: GhAs): Promise<{ number: number; url: string }> {
+  if (originHost(cwd) === 'gitlab') {
+    const created = JSON.parse(await glabApi(cwd, `projects/${originApiPath(cwd)}/merge_requests`, 'POST', ['-f', `source_branch=${branch}`, ...(base ? ['-f', `target_branch=${base}`] : []), '-f', `title=${title}`, '-f', `description=${body}`], 60_000, as?.env)) as { iid?: number; web_url?: string };
+    if (!created.iid || !created.web_url) throw new Error(`GitLab did not return a merge request`);
+    return { number: created.iid, url: created.web_url };
+  }
   const out = await gh(['pr', 'create', '--head', branch, ...(base ? ['--base', base] : []), '--title', title, '--body', body], cwd, 60_000, as?.env);
   const url = out.trim().split('\n').pop() ?? '';
   const number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
@@ -50,10 +64,12 @@ async function createPr(branch: string, base: string | undefined, title: string,
   return { number, url };
 }
 
-/** owner/name#12 for a pull request on GitHub (which links it with its title), else its URL. */
+/** owner/name#12 on GitHub, group/path!12 on GitLab (which links it with its title), else its URL. */
 function prRef(url: string): string {
-  const m = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(url);
-  return m ? `${m[1]}#${m[2]}` : url;
+  const g = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(url);
+  if (g) return `${g[1]}#${g[2]}`;
+  const l = /\/((?:[\w.-]+\/)+[\w.-]+)\/-\/merge_requests\/(\d+)/.exec(url);
+  return l ? `${l[1]}#!${l[2]}` : url;
 }
 
 /** The list of a change's pull requests across repositories, for the description of the one at `self`. */
@@ -245,9 +261,16 @@ export class WorkerPrs {
       if (prs.length > 1 && prs.some((p) => !p.existed)) {
         for (const p of prs) {
           try {
-            const body = await gh(['pr', 'view', p.url, '--json', 'body', '--jq', '.body'], p.cwd, 30_000, as?.env);
-            const next = withRelated(body, relatedBlock(prs, p.url, wt.branch));
-            if (next !== body) await gh(['pr', 'edit', p.url, '--body', next], p.cwd, 60_000, as?.env);
+            if (originHost(p.cwd) === 'gitlab') {
+              const api = `projects/${originApiPath(p.cwd)}/merge_requests/${p.number}`;
+              const body = String((JSON.parse(await glabApi(p.cwd, api, undefined, [])) as { description?: string }).description ?? '');
+              const next = withRelated(body, relatedBlock(prs, p.url, wt.branch));
+              if (next !== body) await glabApi(p.cwd, api, 'PUT', ['-f', `description=${next}`]);
+            } else {
+              const body = await gh(['pr', 'view', p.url, '--json', 'body', '--jq', '.body'], p.cwd, 30_000, as?.env);
+              const next = withRelated(body, relatedBlock(prs, p.url, wt.branch));
+              if (next !== body) await gh(['pr', 'edit', p.url, '--body', next], p.cwd, 60_000, as?.env);
+            }
           } catch (err) {
             failed.push(`Couldn't list the other pull requests on ${p.repo} #${p.number}: ${(err as Error).message}`);
           }

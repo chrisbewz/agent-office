@@ -36,6 +36,8 @@ export interface FloorInfo {
   name: string;
   /** owner/name on GitHub. */
   repo?: string;
+  /** The forge this floor's repository lives on, when it isn't GitHub. */
+  host?: 'gitlab';
   /** Its checkout on the office's machine. */
   dir: string;
   /** The branch that checkout is on ('HEAD' when detached); none when it isn't a git checkout. */

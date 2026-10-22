@@ -20,7 +20,7 @@ function fixture(defaultProvider: AgentProvider = 'claude') {
         id, deskId, kind, provider, model, effort, prompt, name: 'Test',
         color: '#ffffff', status: 'working', acked: false, createdBy: by,
         createdAt: Date.now(), cols: 80, rows: 24, viewers: [], viewerIds: [],
-        worktree: worktree ? { path: `.agent-office/worktrees/${id}`, branch: `office/${id}`, base: 'abc' } : undefined,
+        worktree: worktree ? { path: `.agent-office/worktrees/${id}`, branch: `office/${id}`, base: 'abc', from: 'develop' } : undefined,
       };
       workers.push(worker);
       return worker;
@@ -64,6 +64,28 @@ test('queued provider survives restart even when the configured default differs'
   q.add('Fix login', 'Tester', undefined, undefined, 'opencode'); q.shutdown();
   const restored = f.open(); restored.setLimit(1);
   assert.equal(f.workers[0].provider, 'opencode');
+});
+
+test('a task source branch survives restart and retry', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(); q.setLimit(0);
+  assert.equal(q.add('Fix login', 'Tester', undefined, undefined, undefined, undefined, undefined, undefined, 'release/2.0'), undefined);
+  q.shutdown();
+  const restored = f.open();
+  assert.equal(restored.state().tasks[0].sourceBranch, 'release/2.0');
+  restored.setLimit(0);
+  restored.retry(restored.state().tasks[0].id);
+  assert.equal(restored.state().tasks[0].sourceBranch, 'release/2.0');
+});
+
+test('a task without an explicit source branch keeps the branch it started from when retried', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(undefined, true);
+  q.add('Fix login', 'Tester');
+  assert.equal(q.state().tasks[0].sourceBranch, 'develop');
+  f.workers[0].status = 'done'; q.onWorker(f.workers[0]);
+  q.retry(q.state().tasks[0].id);
+  assert.equal(q.state().tasks[0].sourceBranch, 'develop');
 });
 
 test('queued Pi model and thinking survive restart and retry', (t) => {

@@ -36,22 +36,32 @@ export function floorPalette(i: number): FloorPalette {
 }
 
 /**
- * `owner/repo` from what someone typed or pasted: owner/repo, a github.com URL (https, ssh or
- * git@), with or without .git. Undefined for anything else, so it can never become a CLI option,
- * a path or another host.
- */
+* `owner/repo` from what someone typed or pasted: owner/repo, a github.com or gitlab.com URL
+* (https, ssh or git@), with or without .git. A GitLab project may nest groups arbitrarily deep
+* (up to seven levels of groups pass), so the segment bound only stops a
+* URL that went on past the repository. Undefined for anything else, so it can never become a CLI
+* option, a path or another host.
+*/
 export function normalizeRepo(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   let s = value.trim();
   if (s.length > 200) return undefined;
   s = s.replace(/^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?github\.com[/:]/i, '');
+  // A GitLab URL keeps its groups: gitlab.com/group/sub/project is owner/name'd group/sub/project.
+  s = s.replace(/^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?gitlab\.com[/:]/i, '');
   s = s.replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
   const parts = s.split('/');
-  // A URL may go on past the repository (…/owner/repo/issues/12).
-  if (parts.length < 2) return undefined;
-  const [owner, repo] = parts;
-  if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/.test(owner)) return undefined;
-  if (!/^[a-zA-Z0-9_.-]{1,100}$/.test(repo) || repo === '.' || repo === '..') return undefined;
+  // A GitLab project may nest groups arbitrarily deep (up to seven levels of groups pass).
+  // Anything deeper is a URL that went on past the repository.
+  if (parts.length < 2 || parts.length > 8) return undefined;
+  // Every segment — group or project — takes the same charset: it can never become a CLI option,
+  // a path out of the projects folder, or another host. Whether the project exists is the forge's
+  // word, not the normalizer's.
+  for (const part of parts) {
+    if (!/^[a-zA-Z0-9_.-]{1,100}$/.test(part) || part === '.' || part === '..') return undefined;
+  }
+  const repo = parts[parts.length - 1];
+  const owner = parts.slice(0, -1).join('/');
   return `${owner}/${repo}`;
 }
 
