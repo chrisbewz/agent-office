@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -60,17 +60,15 @@ test('a worker\'s own model and effort go on Codex\'s command line, in place of 
   assert.deepEqual(codexModelArgs(['-m', 'gpt-6-astra'], undefined, 'xhigh'), ['-m', 'gpt-6-astra', '-c', 'model_reasoning_effort="xhigh"']);
 });
 
-test('a Codex worker starts and resumes with its first prompt as the CLI prompt', () => {
+test('a Codex worker starts and resumes with a short first prompt as the CLI prompt', () => {
   const launch = (info: { model?: string; effort?: string }, more: { prompt?: string; resumeSessionId?: string } = {}) => {
-    const h = { info, state: codex.createState!() } as never;
-    const result = codex.launch({ h, args: ['--yolo'], setup: { hook: '/data/hook.cjs' }, ...more });
+    const h = { info: { id: 'worker-short', ...info }, state: codex.createState!() } as never;
+    const result = codex.launch({ h, args: ['--yolo'], cwd: process.cwd(), setup: { hook: '/data/hook.cjs' }, ...more });
     return result.args;
   };
-  const longPrompt = 'x'.repeat(20_000);
-  const fresh = launch({ model: 'gpt-5.5', effort: 'high' }, { prompt: longPrompt });
+  const fresh = launch({ model: 'gpt-5.5', effort: 'high' }, { prompt: 'fix the login' });
   assert.deepEqual(fresh.slice(0, 5), ['--yolo', '--model', 'gpt-5.5', '-c', 'model_reasoning_effort="high"']);
-  assert.deepEqual(fresh.slice(-2), ['--', longPrompt]);
-  assert.ok(fresh.join(' ').length < 32_767, 'the maximum saved office prompt fits within Windows’ command-line limit');
+  assert.deepEqual(fresh.slice(-2), ['--', 'fix the login']);
   // Its options come before the `resume` subcommand, which then takes the session.
   const resumed = launch({ model: 'gpt-5.5', effort: 'high' }, { resumeSessionId: 'thread-1', prompt: 'continue it' });
   assert.deepEqual(resumed.slice(0, 5), ['--yolo', '--model', 'gpt-5.5', '-c', 'model_reasoning_effort="high"']);
@@ -79,6 +77,43 @@ test('a Codex worker starts and resumes with its first prompt as the CLI prompt'
   const plain = launch({});
   assert.equal(plain.includes('--model'), false);
   assert.equal(plain.some((a) => a.startsWith('model_reasoning_effort')), false);
+});
+
+test('a long Codex initial prompt is read from a file instead of exceeding the Windows command limit', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'agent-office-codex-prompt-'));
+  const workerId = 'worker-1';
+  const prompt = 'meeting brief\n'.repeat(1_500);
+  const promptFile = path.join(cwd, '.agent-office', 'initial-prompts', `${workerId}.txt`);
+  const h = { info: { id: workerId }, state: codex.createState!() } as never;
+  try {
+    const result = codex.launch({ h, args: [], prompt, cwd, setup: { hook: '/data/hook.cjs' } });
+    assert.deepEqual(result.args.slice(-2), [
+      '--',
+      'Read and follow the complete initial task in .agent-office/initial-prompts/worker-1.txt. Begin work now.',
+    ]);
+    result.finishEnv?.({});
+    assert.equal(readFileSync(promptFile, 'utf8'), prompt);
+    assert.ok(result.args.join(' ').length < 8_191, 'the Codex batch command stays within cmd.exe’s limit');
+    codex.exited?.(h, cwd);
+    assert.equal(existsSync(promptFile), false, 'the office removes the prompt file when the worker exits');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('long Codex prompt files are excluded from a project git repository', () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'agent-office-codex-git-'));
+  const h = { info: { id: 'worker-1' }, state: codex.createState!() } as never;
+  try {
+    execFileSync('git', ['init', '-q', cwd]);
+    const result = codex.launch({ h, args: [], prompt: 'sensitive task '.repeat(1000), cwd, setup: { hook: '/data/hook.cjs' } });
+    result.finishEnv?.({});
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd, encoding: 'utf8' });
+    assert.equal(status, '');
+    execFileSync('git', ['check-ignore', '-q', '.agent-office/initial-prompts/worker-1.txt'], { cwd });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test('writes a mode-restricted helper that forwards paths without reading transcripts', () => {

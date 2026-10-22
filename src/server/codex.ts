@@ -1,6 +1,11 @@
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import type { AgentEffort } from '../shared/providers.js';
+import { excludeFromGit } from './config.js';
+
+const CODEX_COMMAND_SAFE_LENGTH = 7_500;
+const CODEX_COMMAND_RESERVE = 512;
 
 export const CODEX_HOOK_EVENTS = [
   'SessionStart',
@@ -123,6 +128,94 @@ export function codexModelArgs(args: string[], model?: string, effort?: AgentEff
   if (model) out.push('--model', model);
   if (effort) out.push('-c', `model_reasoning_effort=${JSON.stringify(effort)}`);
   return out;
+}
+
+/** Keep long initial prompts out of the command line used by Windows' Codex .cmd launcher. */
+export function codexInitialPrompt(prompt: string, args: string[], cwd: string, workerId: string) {
+  const commandLength = args.reduce((size, arg) => size + commandArgLength(arg) + 1, 0)
+    + commandArgLength('--') + 1 + commandArgLength(prompt) + CODEX_COMMAND_RESERVE;
+  if (commandLength <= CODEX_COMMAND_SAFE_LENGTH) return { argument: prompt };
+
+  const fileName = `${safePromptId(workerId)}.txt`;
+  const relative = path.join('.agent-office', 'initial-prompts', fileName).split(path.sep).join('/');
+  return {
+    argument: `Read and follow the complete initial task in ${relative}. Begin work now.`,
+    prepare() {
+      let inGit = false;
+      try { inGit = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true'; } catch { /* not a git checkout */ }
+      if (inGit) {
+        excludeFromGit(cwd);
+        try { execFileSync('git', ['check-ignore', '-q', '--', relative], { cwd, stdio: 'ignore' }); }
+        catch { throw new Error('Codex initial prompt file must be ignored by git'); }
+      }
+      const file = codexInitialPromptFile(cwd, fileName, true);
+      try {
+        const prior = lstatSync(file);
+        if (!prior.isFile() || prior.isSymbolicLink() || prior.nlink > 1) {
+          throw new Error('Codex initial prompt path is not a private regular file');
+        }
+        rmSync(file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      writeFileSync(file, prompt, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    },
+  };
+}
+
+/** Removes the ignored prompt file once its Codex process is gone. */
+export function removeCodexInitialPrompt(cwd: string, workerId: string) {
+  try {
+    const file = codexInitialPromptFile(cwd, `${safePromptId(workerId)}.txt`, false);
+    if (!file) return;
+    const stat = lstatSync(file);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1) rmSync(file);
+  } catch {
+    // Cleanup should not make an otherwise finished worker fail.
+  }
+}
+
+function codexInitialPromptFile(cwd: string, name: string, create: true): string;
+function codexInitialPromptFile(cwd: string, name: string, create: false): string | undefined;
+function codexInitialPromptFile(cwd: string, name: string, create: boolean): string | undefined {
+  const root = realpathSync(cwd);
+  let directory = root;
+  for (const part of ['.agent-office', 'initial-prompts']) {
+    directory = path.join(directory, part);
+    let stat;
+    try {
+      stat = lstatSync(directory);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!create && code === 'ENOENT') return undefined;
+      if (!create || code !== 'ENOENT') throw error;
+      try {
+        mkdirSync(directory, { mode: 0o700 });
+      } catch (mkdirError) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') throw mkdirError;
+      }
+      stat = lstatSync(directory);
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error('Codex initial prompt directory must be a real directory inside the worker folder');
+    }
+    const real = realpathSync(directory);
+    const relative = path.relative(root, real);
+    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+      throw new Error('Codex initial prompt directory must stay inside the worker folder');
+    }
+    directory = real;
+  }
+  return path.join(directory, name);
+}
+
+function safePromptId(workerId: string) {
+  return workerId.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/** Estimate Windows argument quoting, including escaping quotes and backslashes. */
+function commandArgLength(arg: string) {
+  return arg.length + (arg.match(/["\\]/g)?.length ?? 0) + 2;
 }
 
 /** Write the stable, self-contained helper invoked by Codex's native command hooks. */
