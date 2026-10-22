@@ -93,7 +93,7 @@ export interface Worker {
   saved?: { ptyId: string; status: WorkerStatus; acked: boolean; waitingSince?: number };
   /** Its process went away mid-turn with the office or the terminal host: its next start carries on (CARRY_ON_PROMPT). */
   interrupted?: boolean;
-  /** A prompt its start couldn't pass on the command line (a Muse resume): typed into its session after SessionStart. */
+  /** A prompt kept off the command line: typed into its session after SessionStart. */
   pendingPrompt?: string;
   /** Output since its scrollback was last saved to disk. */
   unsaved?: boolean;
@@ -131,7 +131,7 @@ export interface WorkerHandle<S = unknown> {
   failStreak: number;
   /** Where its session's tokens and cost are read from (see usage.ts). */
   readonly tracker: UsageTracker;
-  /** A prompt its start couldn't pass on the command line: typed into its session once that's up. */
+  /** A prompt kept off the command line: typed into its session once that's up. */
   pendingPrompt?: string;
   /** Moves it to `status`, raising its flag and bringing its branch up to date as that goes. */
   setStatus(status: WorkerStatus): void;

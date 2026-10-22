@@ -50,6 +50,7 @@ There's a lot more (a rooftop bar, an office dog, an arcade, supercars in the ga
 On the machine that runs the office:
 
 - **Node.js 20+**
+- Long Codex meeting briefs stay within Windows' command-line limit; the office uses an ignored per-worker prompt file when needed.
 - At least one agent CLI, signed in as the user that runs the office: **Claude Code** (`claude`), **Codex** (`codex`), **OpenCode** (`opencode`), **Grok** (`grok`), **Muse** (`muse`), **DeepSeek Harness** (`dsh`), **Pi** (`pi`, 0.87.1+) or the **Cursor** CLI (`cursor-agent`). With [accounts](#add-users), everyone can sign in to their own Claude from the office instead.
 - **git**, and the **GitHub CLI** (`gh auth login`) for cloning repos and the issue and PR boards
 

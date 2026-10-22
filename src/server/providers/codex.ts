@@ -2,7 +2,7 @@
 // /hooks/codex; its usage is read from the root session's rollout (see codex-usage.ts).
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { codexHookArgs, codexModelArgs, normalizeCodexHook, writeCodexHook } from '../codex.js';
+import { codexHookArgs, codexInitialPrompt, codexModelArgs, normalizeCodexHook, removeCodexInitialPrompt, writeCodexHook } from '../codex.js';
 import { CodexUsageReader } from '../codex-usage.js';
 import { codexMcpArgs } from '../office-workers.js';
 import { reduceLifecycle, type ToolTracker } from '../workers/lifecycle.js';
@@ -91,14 +91,21 @@ export const codex: ProviderAdapter<CodexState, CodexSetup> = {
   scrubEnv: ['CODEX_THREAD_ID', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE'],
   createState: () => ({ usage: new CodexUsageReader(), tools: new Map(), pending: new Set() }),
   prepare: ({ dataDir, mcpScript }) => ({ hook: writeCodexHook(dataDir), mcpScript }),
-  launch({ h, args, prompt, resumeSessionId, setup }) {
+  launch({ h, args, prompt, resumeSessionId, setup, cwd }) {
     // Resumed too: Codex resumes on whatever its config says now, not on the model the session ran on.
     args = codexModelArgs(args, h.info.model, h.info.effort);
     args.push(...codexHookArgs(setup.hook), ...(setup.mcpScript ? codexMcpArgs(setup.mcpScript) : []), '--no-alt-screen');
     if (resumeSessionId) args.push('resume', resumeSessionId);
-    if (prompt) args.push('--', prompt);
+    // SessionStart runs on the first turn, so it cannot be used to wake an idle interactive TUI.
+    // Pass the first message as the CLI prompt; later messages still go through the terminal.
+    const initial = prompt ? codexInitialPrompt(prompt, args, cwd, h.info.id) : undefined;
+    if (initial) args.push('--', initial.argument);
     tracker(h.state).clear();
-    return { args, rotateToken: true };
+    const preparePrompt = initial?.prepare;
+    return { args, rotateToken: true, ...(preparePrompt ? { finishEnv: preparePrompt } : {}) };
+  },
+  exited(h, cwd) {
+    removeCodexInitialPrompt(cwd, h.info.id);
   },
   bootHint: 'Open the terminal: complete login and review Office hooks in /hooks',
   hook: { strictJson: true, handle: codexHook },
