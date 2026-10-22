@@ -54,6 +54,7 @@ export function normalizeRepo(value: unknown): string | undefined {
   // A GitLab project may nest groups arbitrarily deep (up to seven levels of groups pass).
   // Anything deeper is a URL that went on past the repository.
   if (parts.length < 2 || parts.length > 8) return undefined;
+  if (parts[0].startsWith('-')) return undefined;
   // Every segment — group or project — takes the same charset: it can never become a CLI option,
   // a path out of the projects folder, or another host. Whether the project exists is the forge's
   // word, not the normalizer's.
