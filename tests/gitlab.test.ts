@@ -31,6 +31,7 @@ const mr = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   author: { username: 'ada' },
   labels: ['bug'],
   source_branch: 'fix-gong',
+  source_project_id: 42,
   target_branch: 'main',
   sha: 'abc123',
   created_at: '2026-01-02T03:04:05Z',
@@ -198,7 +199,30 @@ test('closing an MR can take its branch with it', async () => {
     'acme/app',
   );
   await g.close('pull', 7, { deleteBranch: true });
-  assert.ok(call(log, 'repository/branches/fix-gong'));
+  assert.ok(call(log, 'projects/42/repository/branches/fix-gong'));
+});
+
+test('closing a fork MR deletes the branch in the source project, never the target project', async () => {
+  const log: string[][] = [];
+  const g = new GitLab('/repo', () => {}, () => {}, fake([['merge_requests/7', mr({ source_project_id: 99, target_project_id: 42, source_branch: 'feature/test' })]], log), 'acme/app');
+  assert.equal(await g.close('pull', 7, { deleteBranch: true }), undefined);
+  assert.ok(call(log, 'projects/99/repository/branches/feature%2Ftest'));
+  assert.equal(call(log, 'projects/acme%2Fapp/repository/branches/feature%2Ftest'), undefined);
+});
+
+test('a missing source project never causes a branch deletion and reports the partial close', async () => {
+  const log: string[][] = [];
+  const g = new GitLab('/repo', () => {}, () => {}, fake([['merge_requests/7', mr({ source_project_id: null })]], log), 'acme/app');
+  assert.match(String(await g.close('pull', 7, { deleteBranch: true })), /closed.*source branch/i);
+  assert.equal(call(log, 'repository/branches/'), undefined);
+});
+
+test('a branch deletion failure reports that the MR was closed', async () => {
+  const g = new GitLab('/repo', () => {}, () => {}, async (args) => {
+    if (args.includes('DELETE')) throw new Error('permission denied');
+    return JSON.stringify(args.some((a) => a.includes('merge_requests/7')) ? mr() : []);
+  }, 'acme/app');
+  assert.match(String(await g.close('pull', 7, { deleteBranch: true })), /closed.*permission denied/i);
 });
 
 test('comments post as notes and come back in the shared shape', async () => {

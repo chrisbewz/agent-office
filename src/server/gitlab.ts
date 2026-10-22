@@ -271,14 +271,20 @@ export class GitLab implements BoardBackend {
 
   /** Closes an issue, or an MR without merging it. GitLab has no close reason; a comment first, if any. */
   async close(kind: 'issue' | 'pull', n: number, opts: { comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }): Promise<string | undefined> {
+    let deleteError: string | undefined;
     try {
       const path = this.path();
       const what = kind === 'pull' ? 'merge_requests' : 'issues';
       if (opts.comment) await this.run(['api', '--method', 'POST', `projects/${path}/${what}/${n}/notes`, '-f', `body=${opts.comment}`], this.dir);
       await this.run(['api', '--method', 'PUT', `projects/${path}/${what}/${n}`, '-f', 'state_event=close'], this.dir);
       if (kind === 'pull' && opts.deleteBranch) {
-        const mr = JSON.parse(await this.run(['api', `projects/${path}/merge_requests/${n}`], this.dir));
-        await this.run(['api', '--method', 'DELETE', `projects/${path}/repository/branches/${encodeURIComponent(String(mr.source_branch ?? ''))}`], this.dir).catch(() => undefined);
+        try {
+          const mr = JSON.parse(await this.run(['api', `projects/${path}/merge_requests/${n}`], this.dir));
+          if (!Number.isSafeInteger(mr.source_project_id) || mr.source_project_id <= 0 || typeof mr.source_branch !== 'string' || !mr.source_branch) throw new Error('the source project or branch is unavailable');
+          await this.run(['api', '--method', 'DELETE', `projects/${mr.source_project_id}/repository/branches/${encodeURIComponent(mr.source_branch)}`], this.dir);
+        } catch (err) {
+          deleteError = `Merge request closed, but its source branch could not be deleted: ${(err as Error).message}`;
+        }
       }
     } catch (err) {
       return (err as Error).message;
@@ -288,7 +294,7 @@ export class GitLab implements BoardBackend {
     void refresh().then(() => {
       if ((kind === 'issue' ? this.issues : this.pulls).items.some((i) => i.number === n && i.state === 'OPEN')) setTimeout(() => void refresh(), 3000);
     });
-    return undefined;
+    return deleteError;
   }
 
   /** Every label the repository has, for the label picker. Asked again after a minute (or a failure). */
